@@ -1,0 +1,23 @@
+[package]
+name = "wanderer"
+version = "0.1.0"
+authors = ["Alexander Wauck <waucka@ironstarconsulting.net>"]
+edition = "2018"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+bracket-color = "0.8"
+specs = "0.16"
+gilrs = "0.8"
+simdnoise = "3.1"
+winit = "0.23"
+ash = "0.31"
+vk-mem = "0.2"
+nphysics3d = "0.18"
+num = "0.3"
+memoffset = "0.6"
+cgmath = "0.17"
+image = "0.23"
+tobj= "2.0"
+anyhow = "1.0"

@@ -1,0 +1,29 @@
+https://github.com/google/filament
+https://en.wikipedia.org/wiki/Global_illumination
+https://web.archive.org/web/20160221013732/http://graphics.cs.williams.edu/papers/DeepGBuffer14/
+https://www.youtube.com/c/specialisthun/videos
+http://casual-effects.com/data/index.html
+https://morgan3d.github.io/articles/2019-04-01-ddgi/
+https://github.com/Friduric/voxel-cone-tracing
+https://www.youtube.com/watch?v=EJTc_t3G-js
+https://en.wikipedia.org/wiki/List_of_Intel_graphics_processing_units
+https://en.wikipedia.org/wiki/List_of_AMD_graphics_processing_units
+# Procedural landmass generation
+https://www.youtube.com/watch?v=MRNFcywkUSA&list=PLFt_AvWsXl0eBW2EiBtl_sxmDtSgZBxB3&index=3
+https://vkguide.dev
+https://wickedengine.net/2018/01/18/easy-transparent-shadow-maps/
+https://wickedengine.net/2018/01/10/optimizing-tile-based-light-culling/
+https://wickedengine.net/2019/02/24/thoughts-on-light-culling-stream-compaction-vs-flat-bit-arrays/
+https://wickedengine.net/2019/09/29/entity-component-system/
+https://wickedengine.net/2017/08/30/voxel-based-global-illumination/
+https://wickedengine.net/2017/09/09/skinning-in-compute-shader/
+https://cc0textures.com
+https://texturehaven.com/textures/
+http://mocap.cs.cmu.edu/
+https://cmonkeys.com/
+# OpenGL animation tutorials
+https://www.youtube.com/playlist?list=PLRIWtICgwaX2tKWCxdeB7Wv_rTET9JtWW
+# Coding Adventure
+https://www.youtube.com/playlist?list=PLFt_AvWsXl0ehjAfLFsp1PGaatzAwo0uK
+https://cescg.org/wp-content/uploads/2018/04/Michelic-Real-Time-Rendering-of-Procedurally-Generated-Planets-2.pdf
+http://extremelearning.com.au/how-to-evenly-distribute-points-on-a-sphere-more-effectively-than-the-canonical-fibonacci-lattice/
