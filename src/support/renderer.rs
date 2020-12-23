@@ -27,6 +27,7 @@ pub struct Presenter {
     inflight_fences: Vec<vk::Fence>,
     max_frames_in_flight: usize,
     last_frame: Instant,
+    last_frame_duration: Duration,
     current_frame: usize,
     desired_fps: u32,
 
@@ -109,6 +110,7 @@ impl Presenter {
 	    max_frames_in_flight,
 	    current_frame: 0,
 	    last_frame: Instant::now(),
+	    last_frame_duration: Duration::new(0, 0),
 	    desired_fps,
 
 	    graphics_queue: device.inner.get_default_graphics_queue(),
@@ -140,6 +142,16 @@ impl Presenter {
 
     pub fn ns_since_last_frame(&self) -> u128 {
         self.last_frame.elapsed().as_nanos()
+    }
+
+    pub fn get_current_fps(&self) -> u32 {
+	let ns = self.last_frame_duration.as_nanos();
+	if ns == 0 {
+	    0
+	} else {
+	    let fps = 1_000_000_000_f64 / (ns as f64);
+	    fps as u32
+	}
     }
 
     pub fn wait_for_next_frame(&self) -> anyhow::Result<()> {
@@ -280,6 +292,7 @@ impl Presenter {
 	}
 
         self.current_frame = (self.current_frame + 1) % self.get_swapchain_image_count();
+	self.last_frame_duration = self.last_frame.elapsed();
         self.last_frame = Instant::now();
 	Ok(())
     }

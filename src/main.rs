@@ -364,7 +364,7 @@ impl VulkanApp for VulkanApp21 {
     }
 
     fn get_fps(&self) -> u32 {
-	(1_000_000_000_f64 / (self.presenter.ns_since_last_frame() as f64)) as u32
+	self.presenter.get_current_fps()
     }
 
     fn wait_device_idle(&self) -> anyhow::Result<()> {
