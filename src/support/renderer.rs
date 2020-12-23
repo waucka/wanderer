@@ -140,10 +140,6 @@ impl Presenter {
 	self.desired_fps = desired_fps;
     }
 
-    pub fn ns_since_last_frame(&self) -> u128 {
-        self.last_frame.elapsed().as_nanos()
-    }
-
     pub fn get_current_fps(&self) -> u32 {
 	let ns = self.last_frame_duration.as_nanos();
 	if ns == 0 {
@@ -154,7 +150,7 @@ impl Presenter {
 	}
     }
 
-    pub fn wait_for_next_frame(&self) -> anyhow::Result<()> {
+    pub fn wait_for_next_frame(&self) -> anyhow::Result<Duration> {
         let millis_since_last_frame = self.last_frame.elapsed().as_millis() as i64;
         let millis_until_next_frame = (
 	    ((1_f32 / self.desired_fps as f32) * 1000_f32) as i64
@@ -169,7 +165,7 @@ impl Presenter {
             self.device.device
                 .wait_for_fences(&wait_fences, true, std::u64::MAX)?;
         }
-	Ok(())
+	Ok(self.last_frame.elapsed())
     }
 
     pub fn acquire_next_image<F>(&mut self, viewport_update: &mut F) -> anyhow::Result<u32>
