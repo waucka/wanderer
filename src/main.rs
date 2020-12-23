@@ -317,8 +317,8 @@ impl VulkanApp for VulkanApp21 {
     fn draw_frame(&mut self) -> anyhow::Result<()>{
 	// Hopefully, this will give me the precision I need for the calculation but the
 	// compactness and speed I want for the result.
-	let delta_time = ((self.presenter.ns_since_last_frame() as f64) / 1_000_000_000_f64) as f32;
         self.presenter.wait_for_next_frame()?;
+	let delta_time = ((self.presenter.ns_since_last_frame() as f64) / 1_000_000_000_f64) as f32;
 	let mut maybe_new_dimensions = None;
         let image_index = self.presenter.acquire_next_image(
 	    &mut |width: usize, height: usize| -> anyhow::Result<()> {
