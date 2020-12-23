@@ -181,7 +181,7 @@ impl Image {
     ) -> anyhow::Result<()> {
         CommandBuffer::run_oneshot_internal(
 	    self.device.clone(),
-	    self.device.default_graphics_queue.clone(),
+	    self.device.get_default_graphics_queue(),
 	    |writer| {
 		let src_access_mask;
 		let dst_access_mask;
@@ -243,7 +243,7 @@ impl Image {
     ) -> anyhow::Result<()> {
 	CommandBuffer::run_oneshot_internal(
 	    self.device.clone(),
-	    self.device.default_transfer_queue.clone(),
+	    self.device.get_default_transfer_queue(),
 	    |writer| {
 		writer.copy_buffer_to_image(
 		    buffer,
@@ -257,8 +257,11 @@ impl Image {
 impl Drop for Image {
     fn drop(&mut self) {
 	unsafe {
-            self.device.device.destroy_image(self.img, None);
+	    //println!("Dropping image {:?}", self.img);
 	    if let Some(mem) = self.mem {
+		// If we don't have the memory for it, then we aren't
+		// responsible for destroying it.
+		self.device.device.destroy_image(self.img, None);
 		self.device.device.free_memory(mem, None);
 	    }
 	}

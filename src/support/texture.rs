@@ -52,7 +52,11 @@ impl Texture {
 		.with_num_samples(vk::SampleCountFlags::TYPE_1)
 		.with_format(vk::Format::R8G8B8A8_UNORM)
 		.with_tiling(vk::ImageTiling::OPTIMAL)
-		.with_usage(vk::ImageUsageFlags::TRANSFER_DST | vk::ImageUsageFlags::SAMPLED)
+		.with_usage(
+		    vk::ImageUsageFlags::TRANSFER_SRC |
+		    vk::ImageUsageFlags::TRANSFER_DST |
+		    vk::ImageUsageFlags::SAMPLED,
+		)
 		.with_required_memory_properties(vk::MemoryPropertyFlags::DEVICE_LOCAL)
 		.with_sharing_mode(vk::SharingMode::EXCLUSIVE)
 	)?;
@@ -88,7 +92,7 @@ impl Texture {
     ) -> anyhow::Result<()>{
         super::command_buffer::CommandBuffer::run_oneshot_internal(
 	    self.device.clone(),
-	    self.device.default_transfer_queue.clone(),
+	    self.device.get_default_transfer_queue(),
 	    |writer| {
             let mut image_barrier = vk::ImageMemoryBarrier{
                 s_type: vk::StructureType::IMAGE_MEMORY_BARRIER,

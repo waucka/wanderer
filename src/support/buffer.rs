@@ -225,7 +225,7 @@ impl<T> VertexBuffer<T> {
 	upload_buffer.buf.copy(
 	    &vertex_buffer,
 	    buffer_size,
-	    device.inner.default_transfer_queue.clone(),
+	    device.inner.get_default_transfer_queue(),
 	)?;
 
 	Ok(Self{
@@ -266,7 +266,7 @@ impl IndexBuffer {
 	upload_buffer.buf.copy(
 	    &index_buffer,
 	    buffer_size,
-	    device.inner.default_transfer_queue.clone(),
+	    device.inner.get_default_transfer_queue(),
 	)?;
 
 	Ok(Self{

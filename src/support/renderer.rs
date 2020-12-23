@@ -111,8 +111,8 @@ impl Presenter {
 	    last_frame: Instant::now(),
 	    desired_fps,
 
-	    graphics_queue: device.inner.default_graphics_queue.clone(),
-	    present_queue: device.inner.default_present_queue.clone(),
+	    graphics_queue: device.inner.get_default_graphics_queue(),
+	    present_queue: device.inner.get_default_present_queue(),
 	})
     }
 
@@ -213,6 +213,7 @@ impl Presenter {
             self.device.device
                 .device_wait_idle()?;
         }
+	//println!("Replacing swapchain!");
 
 	//self.swapchain.replace(Swapchain::new(
 	// TODO: I hope this doesn't cause any problems with order of creation/destruction.
@@ -286,6 +287,7 @@ impl Presenter {
 
 impl Drop for Presenter {
     fn drop(&mut self) {
+	//println!("Dropping a Presenter...");
 	unsafe {
 	    for sem in self.image_available_semaphores.iter() {
 		self.device.device.destroy_semaphore(*sem, None);
@@ -395,12 +397,12 @@ impl Swapchain {
 	};
 
 	let (image_sharing_mode, queue_family_indices) =
-            if device.default_graphics_queue != device.default_present_queue {
+            if device.get_default_graphics_queue() != device.get_default_present_queue() {
 		(
                     vk::SharingMode::CONCURRENT,
                     vec![
-			device.default_graphics_queue.family_idx,
-			device.default_present_queue.family_idx,
+			device.get_default_graphics_queue().family_idx,
+			device.get_default_present_queue().family_idx,
                     ],
 		)
             } else {
@@ -473,29 +475,6 @@ impl Swapchain {
             vk::ImageAspectFlags::DEPTH,
             1,
 	)?;
-
-	let swapchain_imageviews = vec![color_image_view.view, depth_image_view.view];
-	let mut framebuffers = vec![];
-	for &image_view in swapchain_imageviews.iter() {
-            let attachments = [color_image_view.view, depth_image_view.view, image_view];
-
-            let framebuffer_create_info = vk::FramebufferCreateInfo{
-		s_type: vk::StructureType::FRAMEBUFFER_CREATE_INFO,
-		p_next: ptr::null(),
-		flags: vk::FramebufferCreateFlags::empty(),
-		render_pass: render_pass.render_pass,
-		attachment_count: attachments.len() as u32,
-		p_attachments: attachments.as_ptr(),
-		width: extent.width,
-		height: extent.height,
-		layers: 1,
-            };
-
-            framebuffers.push(unsafe {
-		device.device
-                    .create_framebuffer(&framebuffer_create_info, None)?
-            })
-	}
 
 	let mut frames = Vec::new();
 	let mut frame_index: u32 = 0;
@@ -598,9 +577,7 @@ pub const GLOBAL_UNIFORM_BINDING: u32 = 0;
 pub const TYPE_UNIFORM_SET: u32 = 1;
 //------------------------------------------------------------------------------
 pub const TYPE_UNIFORM_BINDING: u32 = 0;
-pub const SAMPLER_2D_BINDING: u32 = 1;
-pub const SAMPLER_3D_BINDING: u32 = 2;
-pub const TEXTURE_ARRAY_BINDING: u32 = 3;
+pub const TEXTURE_ARRAY_BINDING: u32 = 1;
 
 ////////////////////////////////////////////////////////////////////////////////
 #[allow(unused)]
@@ -692,9 +669,7 @@ impl<T> UniformSet<T> {
 pub struct ObjectType<T, I> {
     uniform_set: UniformSet<T>,
     uniform_layout: DescriptorSetLayout,
-    sampler_2d: Rc<Sampler>,
-    sampler_3d: Rc<Sampler>,
-    textures: Vec<Rc<Texture>>,
+    textures: Vec<(Rc<Sampler>, Rc<Texture>)>,
     type_pool: DescriptorPool,
     instance_pool: DescriptorPool,
     _phantom_t: PhantomData<T>,
@@ -705,9 +680,7 @@ impl<T, I> ObjectType<T, I> {
     pub fn new(
 	device: &Device,
 	uniform_struct: T,
-	sampler_2d: Rc<Sampler>,
-	sampler_3d: Rc<Sampler>,
-	textures: Vec<Rc<Texture>>,
+	textures: Vec<(Rc<Sampler>, Rc<Texture>)>,
 	num_swapchain_images: usize,
     ) -> anyhow::Result<Self> {
 	let type_uniform_bindings = [
@@ -721,22 +694,8 @@ impl<T, I> ObjectType<T, I> {
 		p_immutable_samplers: ptr::null(),
 	    },
 	    vk::DescriptorSetLayoutBinding{
-		binding: SAMPLER_2D_BINDING,
-		descriptor_type: vk::DescriptorType::SAMPLER,
-		descriptor_count: 1,
-		stage_flags: vk::ShaderStageFlags::FRAGMENT,
-		p_immutable_samplers: ptr::null(),
-	    },
-	    vk::DescriptorSetLayoutBinding{
-		binding: SAMPLER_3D_BINDING,
-		descriptor_type: vk::DescriptorType::SAMPLER,
-		descriptor_count: 1,
-		stage_flags: vk::ShaderStageFlags::FRAGMENT,
-		p_immutable_samplers: ptr::null(),
-	    },
-	    vk::DescriptorSetLayoutBinding{
 		binding: TEXTURE_ARRAY_BINDING,
-		descriptor_type: vk::DescriptorType::UNIFORM_BUFFER,
+		descriptor_type: vk::DescriptorType::COMBINED_IMAGE_SAMPLER,
 		descriptor_count: textures.len() as u32,
 		stage_flags: vk::ShaderStageFlags::FRAGMENT,
 		p_immutable_samplers: ptr::null(),
@@ -758,15 +717,13 @@ impl<T, I> ObjectType<T, I> {
 	Ok(Self{
 	    uniform_set: UniformSet::new(device, uniform_struct, num_swapchain_images)?,
 	    uniform_layout,
-	    sampler_2d,
-	    sampler_3d,
 	    textures,
 	    // TODO: automatically allocate more pools when these are exhausted.
 	    type_pool: DescriptorPool::from_layout_bindings(
 		device,
 		&type_uniform_bindings,
-		// Even 10 is probably too much, but who knows?
-		10,
+		// 10 was too few here, and I don't know why.
+		20,
 	    )?,
 	    // TODO: this has to be kept in sync with the stuff in RenderObject, which is
 	    //       error-prone.  Find a better way.
@@ -816,21 +773,11 @@ impl<T, I> ObjectType<T, I> {
 		offset: 0,
 		range: uniform_buffer.len(),
 	    }];
-	    let sampler_2d_info = [vk::DescriptorImageInfo{
-		sampler: self.sampler_2d.sampler,
-		image_view: vk::ImageView::null(),
-		image_layout: vk::ImageLayout::UNDEFINED,
-	    }];
-	    let sampler_3d_info = [vk::DescriptorImageInfo{
-		sampler: self.sampler_3d.sampler,
-		image_view: vk::ImageView::null(),
-		image_layout: vk::ImageLayout::UNDEFINED,
-	    }];
 
 	    let mut image_descriptor_infos = vec![];
-	    for texture in self.textures.iter() {
+	    for (sampler, texture) in self.textures.iter() {
 		image_descriptor_infos.push(vk::DescriptorImageInfo{
-		    sampler: vk::Sampler::null(),
+		    sampler: sampler.sampler,
 		    image_view: texture.image_view.view,
 		    image_layout: vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
 		});
@@ -853,34 +800,10 @@ impl<T, I> ObjectType<T, I> {
 		    s_type: vk::StructureType::WRITE_DESCRIPTOR_SET,
 		    p_next: ptr::null(),
 		    dst_set: descriptor_sets[i],
-		    dst_binding: SAMPLER_2D_BINDING,
-		    dst_array_element: 0,
-		    descriptor_count: 1,
-		    descriptor_type: vk::DescriptorType::SAMPLER,
-		    p_image_info: sampler_2d_info.as_ptr(),
-		    p_buffer_info: ptr::null(),
-		    p_texel_buffer_view: ptr::null(),
-		},
-		vk::WriteDescriptorSet{
-		    s_type: vk::StructureType::WRITE_DESCRIPTOR_SET,
-		    p_next: ptr::null(),
-		    dst_set: descriptor_sets[i],
-		    dst_binding: SAMPLER_3D_BINDING,
-		    dst_array_element: 0,
-		    descriptor_count: 1,
-		    descriptor_type: vk::DescriptorType::SAMPLER,
-		    p_image_info: sampler_3d_info.as_ptr(),
-		    p_buffer_info: ptr::null(),
-		    p_texel_buffer_view: ptr::null(),
-		},
-		vk::WriteDescriptorSet{
-		    s_type: vk::StructureType::WRITE_DESCRIPTOR_SET,
-		    p_next: ptr::null(),
-		    dst_set: descriptor_sets[i],
 		    dst_binding: TEXTURE_ARRAY_BINDING,
 		    dst_array_element: 0,
 		    descriptor_count: image_descriptor_infos.len() as u32,
-		    descriptor_type: vk::DescriptorType::SAMPLED_IMAGE,
+		    descriptor_type: vk::DescriptorType::COMBINED_IMAGE_SAMPLER,
 		    p_image_info: image_descriptor_infos.as_ptr(),
 		    p_buffer_info: ptr::null(),
 		    p_texel_buffer_view: ptr::null(),
@@ -1042,20 +965,19 @@ impl<G> GlobalUniform<G> {
 	    binding_count: 1,
 	    p_bindings: global_uniform_bindings.as_ptr(),
 	};
-	let layout = unsafe {
-	    device.inner.device.create_descriptor_set_layout(&global_layout_info, None)?
-	};
 	Ok(Self{
 	    uniform_set,
 	    uniform_layout: DescriptorSetLayout{
 		device: device.inner.clone(),
-		layout,
+		layout: unsafe {
+		    device.inner.device.create_descriptor_set_layout(&global_layout_info, None)?
+		},
 	    },
 	    global_pool: DescriptorPool::new(
 		device,
 		&vec![(vk::DescriptorType::UNIFORM_BUFFER, 1)],
-		// Even 10 is probably too much, but who knows?
-		10,
+		// 10 was too few here, and I don't know why.
+		20,
 	    )?,
 	})
     }
@@ -1125,6 +1047,7 @@ impl<G> GlobalUniform<G> {
 //  * I: uniform type for per-instance data
 pub struct ObjectTypeRenderer<V, G, T, I> where V: Vertex {
     device: Rc<InnerDevice>,
+    _global_uniform_layout: DescriptorSetLayout,
     _type_uniform_layout: DescriptorSetLayout,
     _instance_uniform_layout: DescriptorSetLayout,
     pipeline_layout: vk::PipelineLayout,
@@ -1169,22 +1092,8 @@ impl<V, G, T, I> ObjectTypeRenderer<V, G, T, I>  where V: Vertex {
 		    p_immutable_samplers: ptr::null(),
 		},
 		vk::DescriptorSetLayoutBinding{
-		    binding: SAMPLER_2D_BINDING,
-		    descriptor_type: vk::DescriptorType::SAMPLER,
-		    descriptor_count: 1,
-		    stage_flags: vk::ShaderStageFlags::FRAGMENT,
-		    p_immutable_samplers: ptr::null(),
-		},
-		vk::DescriptorSetLayoutBinding{
-		    binding: SAMPLER_3D_BINDING,
-		    descriptor_type: vk::DescriptorType::SAMPLER,
-		    descriptor_count: 1,
-		    stage_flags: vk::ShaderStageFlags::FRAGMENT,
-		    p_immutable_samplers: ptr::null(),
-		},
-		vk::DescriptorSetLayoutBinding{
 		    binding: TEXTURE_ARRAY_BINDING,
-		    descriptor_type: vk::DescriptorType::UNIFORM_BUFFER,
+		    descriptor_type: vk::DescriptorType::COMBINED_IMAGE_SAMPLER,
 		    descriptor_count: num_textures as u32,
 		    stage_flags: vk::ShaderStageFlags::FRAGMENT,
 		    p_immutable_samplers: ptr::null(),
@@ -1204,21 +1113,21 @@ impl<V, G, T, I> ObjectTypeRenderer<V, G, T, I>  where V: Vertex {
 		s_type: vk::StructureType::DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
 		p_next: ptr::null(),
 		flags: vk::DescriptorSetLayoutCreateFlags::empty(),
-		binding_count: 1,
+		binding_count: global_uniform_bindings.len() as u32,
 		p_bindings: global_uniform_bindings.as_ptr(),
 	    };
 	    let type_layout_info = vk::DescriptorSetLayoutCreateInfo{
 		s_type: vk::StructureType::DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
 		p_next: ptr::null(),
 		flags: vk::DescriptorSetLayoutCreateFlags::empty(),
-		binding_count: 1,
+		binding_count: type_uniform_bindings.len() as u32,
 		p_bindings: type_uniform_bindings.as_ptr(),
 	    };
 	    let instance_layout_info = vk::DescriptorSetLayoutCreateInfo{
 		s_type: vk::StructureType::DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
 		p_next: ptr::null(),
 		flags: vk::DescriptorSetLayoutCreateFlags::empty(),
-		binding_count: 1,
+		binding_count: instance_uniform_bindings.len() as u32,
 		p_bindings: instance_uniform_bindings.as_ptr(),
 	    };
 	    unsafe {
@@ -1260,7 +1169,7 @@ impl<V, G, T, I> ObjectTypeRenderer<V, G, T, I>  where V: Vertex {
 
 	Ok(Self{
 	    device: device.clone(),
-	    //global_uniform_layout: DescriptorSetLayout::new(device, set_layouts[0]),
+	    _global_uniform_layout: DescriptorSetLayout::new(device.clone(), set_layouts[0]),
 	    _type_uniform_layout: DescriptorSetLayout::new(device.clone(), set_layouts[1]),
 	    _instance_uniform_layout: DescriptorSetLayout::new(device.clone(), set_layouts[2]),
 	    pipeline_layout,
@@ -1529,6 +1438,7 @@ struct DescriptorSetLayout {
 
 impl DescriptorSetLayout {
     fn new(device: Rc<InnerDevice>, layout: vk::DescriptorSetLayout) -> Self {
+	//println!("Creating a DescriptorSetLayout...");
 	Self{
 	    device,
 	    layout,
@@ -1538,6 +1448,7 @@ impl DescriptorSetLayout {
 
 impl Drop for DescriptorSetLayout {
     fn drop(&mut self) {
+	//println!("Dropping a DescriptorSetLayout...");
 	unsafe {
 	    self.device.device.destroy_descriptor_set_layout(self.layout, None);
 	}

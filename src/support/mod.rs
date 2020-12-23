@@ -409,13 +409,6 @@ impl Queue {
     fn get(&self) -> vk::Queue {
 	self.queue
     }
-
-    // Do not call this except in the drop() method for InnerDevice.
-    fn discard(&mut self) {
-	unsafe {
-            self.device.destroy_command_pool(self.command_pool, None);
-	}
-    }
 }
 
 impl std::cmp::PartialEq for Queue {
@@ -424,6 +417,14 @@ impl std::cmp::PartialEq for Queue {
     }
 }
 impl std::cmp::Eq for Queue {}
+
+impl Drop for Queue {
+    fn drop(&mut self) {
+	unsafe {
+	    self.device.destroy_command_pool(self.command_pool, None);
+	}
+    }
+}
 
 pub struct DeviceBuilder {
     window_title: Defaulted<String>,
@@ -552,17 +553,17 @@ impl Device {
     }
 
     pub fn get_default_graphics_queue(&self) -> Rc<Queue> {
-	self.inner.default_graphics_queue.clone()
+	self.inner.get_default_graphics_queue()
     }
 
     #[allow(unused)]
     pub fn get_default_present_queue(&self) -> Rc<Queue> {
-	self.inner.default_present_queue.clone()
+	self.inner.get_default_present_queue()
     }
 
     #[allow(unused)]
     pub fn get_default_transfer_queue(&self) -> Rc<Queue> {
-	self.inner.default_transfer_queue.clone()
+	self.inner.get_default_transfer_queue()
     }
 
     #[allow(unused)]
@@ -570,7 +571,6 @@ impl Device {
 	&self.inner.queues
     }
 }
-
 
 pub struct InnerDevice {
     window: winit::window::Window,
@@ -586,9 +586,10 @@ pub struct InnerDevice {
     memory_properties: vk::PhysicalDeviceMemoryProperties,
     device: ash::Device,
     queues: Vec<Rc<Queue>>,
-    default_graphics_queue: Rc<Queue>,
-    default_present_queue: Rc<Queue>,
-    default_transfer_queue: Rc<Queue>,
+    // These three are indexes into the above vector ("queues").
+    default_graphics_queue_idx: usize,
+    default_present_queue_idx: usize,
+    default_transfer_queue_idx: usize,
 }
 
 impl InnerDevice {
@@ -641,29 +642,23 @@ impl InnerDevice {
 	    queue_infos,
 	)?;
 
-	let mut maybe_graphics_queue = None;
-	let mut maybe_present_queue = None;
-	let mut maybe_transfer_queue = None;
-	for queue in queues.iter() {
+	let mut maybe_graphics_queue_idx = None;
+	let mut maybe_present_queue_idx = None;
+	let mut maybe_transfer_queue_idx = None;
+	for (idx, queue) in queues.iter().enumerate() {
             if queue.can_do_graphics() {
-		maybe_graphics_queue = Some(queue.clone())
+		maybe_graphics_queue_idx = Some(idx)
             }
 	    if queue.can_present() {
-		maybe_present_queue = Some(queue.clone())
+		maybe_present_queue_idx = Some(idx)
 	    }
-	    // Not used yet
-            //if queue.flags.contains(vk::QueueFlags::COMPUTE) {
-            //}
             if queue.can_do_transfer() {
-		maybe_transfer_queue = Some(queue.clone())
+		maybe_transfer_queue_idx = Some(idx)
             }
-	    // Not used yet
-            //if queue.flags.contains(vk::QueueFlags::SPARSE_BINDING) {
-            //}
 	}
 
-	let (default_graphics_queue, default_present_queue, default_transfer_queue) =
-	    match (maybe_graphics_queue, maybe_present_queue, maybe_transfer_queue) {
+	let (default_graphics_queue_idx, default_present_queue_idx, default_transfer_queue_idx) =
+	    match (maybe_graphics_queue_idx, maybe_present_queue_idx, maybe_transfer_queue_idx) {
 		(Some(q1), Some(q2), Some(q3)) => (q1, q2, q3),
 		_ => panic!("Unable to create all three of: graphics queue, present queue, transfer queue!"),
 	    };
@@ -682,36 +677,35 @@ impl InnerDevice {
             memory_properties,
             device: device.clone(),
 	    queues,
-	    default_graphics_queue,
-	    default_present_queue,
-	    default_transfer_queue,
+	    default_graphics_queue_idx,
+	    default_present_queue_idx,
+	    default_transfer_queue_idx,
         })
+    }
+
+    pub (in super) fn get_default_graphics_queue(&self) -> Rc<Queue> {
+	self.queues[self.default_graphics_queue_idx].clone()
+    }
+
+    #[allow(unused)]
+    pub (in super) fn get_default_present_queue(&self) -> Rc<Queue> {
+	self.queues[self.default_present_queue_idx].clone()
+    }
+
+    #[allow(unused)]
+    pub (in super) fn get_default_transfer_queue(&self) -> Rc<Queue> {
+	self.queues[self.default_transfer_queue_idx].clone()
     }
 }
 
 impl Drop for InnerDevice {
     fn drop(&mut self) {
 	unsafe {
-	    if let Some(q) = Rc::get_mut(&mut self.default_graphics_queue) {
-		q.discard();
-	    } else {
-		panic!("We are destroying a Device, but a graphics queue is still in use!");
-	    }
-	    if self.default_graphics_queue != self.default_present_queue {
-		if let Some(q) = Rc::get_mut(&mut self.default_present_queue) {
-		    q.discard();
-		} else {
-		    panic!("We are destroying a Device, but a present queue is still in use!");
+	    for q in self.queues.drain(..) {
+		if Rc::strong_count(&q) > 1 {
+		    panic!("We are destroying a Device, but a queue is still in use!");
 		}
 	    }
-	    if self.default_graphics_queue != self.default_transfer_queue &&
-		self.default_present_queue != self.default_transfer_queue {
-		    if let Some(q) = Rc::get_mut(&mut self.default_transfer_queue) {
-			q.discard();
-		    } else {
-			panic!("We are destroying a Device, but a transfer queue is still in use!");
-		    }
-		}
             self.device.destroy_device(None);
             self.surface_loader.destroy_surface(self.surface, None);
 
@@ -731,13 +725,15 @@ fn create_logical_device(
     enabled_extensions: &[String],
 ) -> ash::Device {
     let mut queue_create_infos = vec![];
+    // This needs to be outside the loop to avoid use-after-free problems with the pointer
+    // stuff going on in DeviceQueueCreateInfo below.
+    let mut priority = 1.0_f32;
+    let mut queue_priorities = vec![];
     // This will fail horribly if the queue IDs are not consecutive.
     // Since the Vulkan API assumes they are, I don't think there are
     // any plausible cases where they won't be.
     for queue_info in queue_infos.iter() {
-	let mut priority = 1.0_f32;
-	let mut queue_priorities = vec![];
-	for _ in queue_info.queues.iter() {
+	for _ in queue_priorities.len()..queue_info.queues.len() {
 	    queue_priorities.push(priority);
 	    priority = priority / 2_f32;
 	}
@@ -747,7 +743,7 @@ fn create_logical_device(
 	    flags: vk::DeviceQueueCreateFlags::empty(),
 	    queue_family_index: queue_info.family_idx,
 	    p_queue_priorities: queue_priorities.as_ptr(),
-	    queue_count: queue_priorities.len() as u32,
+	    queue_count: queue_info.queues.len() as u32,
         });
     }
 
@@ -756,6 +752,7 @@ fn create_logical_device(
     };
 
     physical_device_features.shader_storage_image_array_dynamic_indexing = vk::TRUE;
+    physical_device_features.sampler_anisotropy = vk::TRUE;
 
     let required_validation_layer_raw_names: Vec<CString> = VALIDATION
         .required_validation_layers

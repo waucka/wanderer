@@ -14,8 +14,7 @@ pub struct ValidationInfo {
 
 pub const VALIDATION: ValidationInfo = ValidationInfo {
     is_enabled: true,
-    //required_validation_layers: ["VK_LAYER_KHRONOS_validation"],
-    required_validation_layers: ["VK_LAYER_LUNARG_standard_validation"],
+    required_validation_layers: ["VK_LAYER_KHRONOS_validation"],
 };
 
 unsafe extern "system" fn vulkan_debug_utils_callback(

@@ -10,8 +10,7 @@ layout (set = 0, binding = 0, std140) uniform UniformBufferObject {
     bool use_diffuse;
     bool use_specular;
 } global_ubo;
-layout (set = 1, binding = 1) uniform sampler2D texSampler;
-layout (set = 1, binding = 3) uniform texture2D textures[];
+layout (set = 1, binding = 1) uniform sampler2D textures[];
 layout (set = 2, binding = 0, std140) uniform InstanceSpecificUBO {
   vec4 tint;
 } instance_ubo;
@@ -46,5 +45,5 @@ void main() {
   if (global_ubo.use_specular) {
     lighting = lighting + specular;
   }
-  outColor = vec4(lighting, 1.0) * texture(texSampler, fragTexCoord);
+  outColor = vec4(lighting, 1.0) * texture(textures[0], fragTexCoord);
 }
