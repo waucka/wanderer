@@ -43,6 +43,7 @@ impl Model {
                         mesh.texcoords[i * 2],
                         mesh.texcoords[i * 2 +1],
                     ],
+		    tex_idx: 0,//(mesh.positions[i * 3] * 10.0) as u32 % 2,
                 };
                 vertices.push(vertex);
             }
@@ -70,6 +71,7 @@ pub struct Vertex {
     pub pos: [f32; 4],
     pub normal: [f32; 4],
     pub tex_coord: [f32; 2],
+    pub tex_idx: u32,
 }
 
 impl super::support::shader::Vertex for Vertex {
@@ -100,6 +102,12 @@ impl super::support::shader::Vertex for Vertex {
                 location: 2,
                 format: vk::Format::R32G32_SFLOAT,
                 offset: offset_of!(Self, tex_coord) as u32,
+            },
+            vk::VertexInputAttributeDescription{
+                binding: 0,
+                location: 3,
+                format: vk::Format::R32_UINT,
+                offset: offset_of!(Self, tex_idx) as u32,
             },
         ]
     }

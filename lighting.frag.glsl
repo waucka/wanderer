@@ -1,6 +1,7 @@
 #version 450
 
 #extension GL_ARB_separate_shader_objects : enable
+#extension GL_EXT_nonuniform_qualifier : enable
 
 layout (set = 0, binding = 0, std140) uniform UniformBufferObject {
     mat4 model;
@@ -18,6 +19,7 @@ layout (set = 2, binding = 0, std140) uniform InstanceSpecificUBO {
 layout (location = 0) in vec2 fragTexCoord;
 layout (location = 1) in vec3 normal;
 layout (location = 2) in vec3 fragPos;
+layout (location = 3) in flat uint texIdx;
 
 layout (location = 0) out vec4 outColor;
 
@@ -45,5 +47,5 @@ void main() {
   if (global_ubo.use_specular) {
     lighting = lighting + specular;
   }
-  outColor = vec4(lighting, 1.0) * texture(textures[0], fragTexCoord);
+  outColor = vec4(lighting, 1.0) * texture(textures[nonuniformEXT(texIdx)], fragTexCoord);
 }

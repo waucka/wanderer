@@ -199,7 +199,16 @@ impl VulkanApp21 {
 	    vk::SamplerMipmapMode::LINEAR,
 	    vk::SamplerAddressMode::REPEAT,
         )?);
-        let textures = vec![(sampler, Rc::new(texture))];
+        let texture2 = Texture::from_file(&device, &Path::new("./assets/textures/MetalPlates001/MetalPlates001_4K_Color.jpg"))?;
+        let sampler2 = Rc::new(Sampler::new(
+	    &device,
+	    texture.get_mip_levels(),
+	    vk::Filter::LINEAR,
+	    vk::Filter::LINEAR,
+	    vk::SamplerMipmapMode::LINEAR,
+	    vk::SamplerAddressMode::REPEAT,
+        )?);
+        let textures = vec![(sampler, Rc::new(texture)), (sampler2, Rc::new(texture2))];
 	let num_textures = textures.len();
 
         let static_geometry_type = Rc::new(ObjectType::new(

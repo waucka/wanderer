@@ -751,6 +751,23 @@ fn create_logical_device(
         ..Default::default()
     };
 
+    let descriptor_indexing_features = {
+	let mut descriptor_indexing_features = vk::PhysicalDeviceDescriptorIndexingFeatures{
+	    s_type: vk::StructureType::PHYSICAL_DEVICE_DESCRIPTOR_INDEXING_FEATURES,
+	    p_next: ptr::null_mut(),
+	    ..Default::default()
+	};
+	descriptor_indexing_features.runtime_descriptor_array = vk::TRUE;
+	descriptor_indexing_features.shader_uniform_buffer_array_non_uniform_indexing = vk::TRUE;
+	descriptor_indexing_features.shader_sampled_image_array_non_uniform_indexing = vk::TRUE;
+	descriptor_indexing_features.shader_storage_buffer_array_non_uniform_indexing = vk::TRUE;
+	descriptor_indexing_features.shader_storage_image_array_non_uniform_indexing = vk::TRUE;
+	descriptor_indexing_features
+    };
+
+    physical_device_features.shader_uniform_buffer_array_dynamic_indexing = vk::TRUE;
+    physical_device_features.shader_sampled_image_array_dynamic_indexing = vk::TRUE;
+    physical_device_features.shader_storage_buffer_array_dynamic_indexing = vk::TRUE;
     physical_device_features.shader_storage_image_array_dynamic_indexing = vk::TRUE;
     physical_device_features.sampler_anisotropy = vk::TRUE;
 
@@ -776,9 +793,11 @@ fn create_logical_device(
 	enable_extension_names.push(ext.as_ptr());
     }
 
+    let p_next: *const c_void = &descriptor_indexing_features as *const _ as *const _;
+
     let device_create_info = vk::DeviceCreateInfo{
         s_type: vk::StructureType::DEVICE_CREATE_INFO,
-        p_next: ptr::null(),
+        p_next,
         flags: vk::DeviceCreateFlags::empty(),
         queue_create_info_count: queue_create_infos.len() as u32,
         p_queue_create_infos: queue_create_infos.as_ptr(),
