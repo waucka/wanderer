@@ -306,7 +306,7 @@ impl<T> UniformBuffer<T> {
 	    vk::SharingMode::EXCLUSIVE,
 	)?;
 
-	let mut this = Self{
+	let this = Self{
 	    buf: buffer,
 	    size,
 	    _phantom: std::marker::PhantomData,
@@ -320,7 +320,7 @@ impl<T> UniformBuffer<T> {
     }
 
     pub fn update(
-	&mut self,
+	&self,
 	new_value: &T,
     ) -> anyhow::Result<()> {
 	let new_value_size = std::mem::size_of_val::<T>(new_value);
@@ -345,30 +345,82 @@ impl<T> HasBuffer for UniformBuffer<T> {
     }
 }
 
-/*impl<T> HasUniformDescriptor for UniformBuffer<T> {
-    fn create_write_descriptor_set(
-	&self,
-	dst_set: vk::DescriptorSet,
-	dst_binding: u32,
-	dst_array_element: u32,
-    ) -> vk::WriteDescriptorSet {
-	let descriptor_buffer_info = [vk::DescriptorBufferInfo{
-            buffer: self.buf.buf,
-            offset: 0,
-            range: self.size as u64,
-        }];
+pub struct UniformBufferSet<T> {
+    uniform_struct: T,
+    uniform_buffers: Vec<Rc<UniformBuffer<T>>>,
+}
 
-	vk::WriteDescriptorSet{
-            s_type: vk::StructureType::WRITE_DESCRIPTOR_SET,
-            p_next: ptr::null(),
-            dst_set,
-            dst_binding,
-            dst_array_element,
-            descriptor_count: 1,
-            descriptor_type: vk::DescriptorType::UNIFORM_BUFFER,
-            p_image_info: ptr::null(),
-            p_buffer_info: descriptor_buffer_info.as_ptr(),
-            p_texel_buffer_view: ptr::null(),
-        }
+impl<T> UniformBufferSet<T> {
+    pub fn new(
+	device: &Device,
+	uniform_struct: T,
+	num_swapchain_images: usize,
+    ) -> anyhow::Result<Self> {
+	let mut uniform_buffers = vec![];
+	for _ in 0..num_swapchain_images {
+	    uniform_buffers.push(Rc::new(UniformBuffer::new(device, Some(&uniform_struct))?));
+	}
+	Ok(Self{
+	    uniform_struct,
+	    uniform_buffers,
+	})
     }
-}*/
+
+    // Alters the uniform data and uploads it to the selected GPU buffer
+    pub fn update_and_upload<F, R>(&mut self, i: usize, update_fn: F) -> anyhow::Result<R>
+    where
+	F: Fn(&mut T) -> anyhow::Result<R>
+    {
+	if i > self.uniform_buffers.len() {
+	    return Err(anyhow!(
+		"Attempted to update uniform buffer #{} of {}",
+		i+1,
+		self.uniform_buffers.len(),
+	    ));
+	}
+	let result = update_fn(&mut self.uniform_struct)?;
+	self.uniform_buffers[i].update(&self.uniform_struct)?;
+	Ok(result)
+    }
+
+    // Alters the uniform data without altering any GPU buffers
+    pub fn update<F, R>(&mut self, update_fn: F) -> anyhow::Result<R>
+    where
+	F: Fn(&mut T) -> anyhow::Result<R>
+    {
+	update_fn(&mut self.uniform_struct)
+    }
+
+    // Uploads whatever is currently in the uniform data to the selected GPU buffer
+    #[allow(unused)]
+    pub fn sync(&self, i: usize) -> anyhow::Result<()> {
+	if i > self.uniform_buffers.len() {
+	    return Err(anyhow!(
+		"Attempted to sync uniform buffer #{} of {}",
+		i+1,
+		self.uniform_buffers.len(),
+	    ));
+	}
+	self.uniform_buffers[i].update(&self.uniform_struct)
+    }
+
+    pub fn len(&self) -> usize {
+	self.uniform_buffers.len()
+    }
+
+    pub fn get_buffer(&self, i: usize) -> anyhow::Result<Rc<UniformBuffer<T>>> {
+	if i < self.uniform_buffers.len() {
+	    Ok(self.uniform_buffers[i].clone())
+	} else {
+	    Err(anyhow!(
+		"Index out of range ({} uniform buffers, index {})",
+		self.uniform_buffers.len(),
+		i,
+	    ))
+	}
+    }
+
+    fn get_buffer_unchecked(&self, i: usize) -> &UniformBuffer<T> {
+	&self.uniform_buffers[i]
+    }
+}

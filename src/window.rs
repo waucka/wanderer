@@ -23,8 +23,9 @@ pub trait VulkanApp {
     fn wait_device_idle(&self) -> anyhow::Result<()>;
     fn resize_framebuffer(&mut self);
     fn window_ref(&self) -> &Window;
-    fn set_rotation_speed(&mut self, speed: f32);
-    fn set_tilt_speed(&mut self, speed: f32);
+    fn set_yaw_speed(&mut self, speed: f32);
+    fn set_pitch_speed(&mut self, speed: f32);
+    fn set_roll_speed(&mut self, speed: f32);
     fn set_x_speed(&mut self, speed: f32);
     fn set_y_speed(&mut self, speed: f32);
     fn set_z_speed(&mut self, speed: f32);
@@ -37,6 +38,8 @@ pub fn main_loop<A: 'static + VulkanApp>(event_loop: EventLoop<()>, mut vulkan_a
     let mut a_down = false;
     let mut s_down = false;
     let mut d_down = false;
+    let mut q_down = false;
+    let mut e_down = false;
     let mut space_down = false;
     let mut c_down = false;
     let mut up_arrow_down = false;
@@ -71,6 +74,12 @@ pub fn main_loop<A: 'static + VulkanApp>(event_loop: EventLoop<()>, mut vulkan_a
                                     },
                                     (Some(VirtualKeyCode::D), state) => {
                                         d_down = state == ElementState::Pressed;
+                                    },
+                                    (Some(VirtualKeyCode::Q), state) => {
+                                        q_down = state == ElementState::Pressed;
+                                    },
+                                    (Some(VirtualKeyCode::E), state) => {
+                                        e_down = state == ElementState::Pressed;
                                     },
                                     (Some(VirtualKeyCode::Space), state) => {
                                         space_down = state == ElementState::Pressed;
@@ -114,31 +123,39 @@ pub fn main_loop<A: 'static + VulkanApp>(event_loop: EventLoop<()>, mut vulkan_a
                                 }
 
                                 let rotation_speed = if shift_down {
-                                    50.0
+                                    100.0
                                 } else {
-                                    10.0
+                                    20.0
                                 };
 
                                 if left_arrow_down && !right_arrow_down {
-                                    vulkan_app.set_rotation_speed(rotation_speed);
+                                    vulkan_app.set_yaw_speed(rotation_speed);
                                 } else if right_arrow_down && !left_arrow_down {
-                                    vulkan_app.set_rotation_speed(-rotation_speed);
+                                    vulkan_app.set_yaw_speed(-rotation_speed);
                                 } else {
-                                    vulkan_app.set_rotation_speed(0.0);
+                                    vulkan_app.set_yaw_speed(0.0);
                                 }
 
                                 if up_arrow_down && !down_arrow_down {
-                                    vulkan_app.set_tilt_speed(-rotation_speed);
+                                    vulkan_app.set_pitch_speed(-rotation_speed);
                                 } else if down_arrow_down && !up_arrow_down {
-                                    vulkan_app.set_tilt_speed(rotation_speed);
+                                    vulkan_app.set_pitch_speed(rotation_speed);
                                 } else {
-                                    vulkan_app.set_tilt_speed(0.0);
+                                    vulkan_app.set_pitch_speed(0.0);
+                                }
+
+                                if q_down && !e_down {
+                                    vulkan_app.set_roll_speed(-rotation_speed);
+                                } else if e_down && !q_down {
+                                    vulkan_app.set_roll_speed(rotation_speed);
+                                } else {
+                                    vulkan_app.set_roll_speed(0.0);
                                 }
 
                                 let translation_speed = if shift_down {
-                                    0.05
+                                    2.5
                                 } else {
-                                    0.01
+                                    0.5
                                 };
 
                                 if space_down && !c_down {
@@ -158,9 +175,9 @@ pub fn main_loop<A: 'static + VulkanApp>(event_loop: EventLoop<()>, mut vulkan_a
                                 }
 
                                 if d_down && !a_down {
-                                    vulkan_app.set_x_speed(translation_speed);
-                                } else if a_down && !d_down {
                                     vulkan_app.set_x_speed(-translation_speed);
+                                } else if a_down && !d_down {
+                                    vulkan_app.set_x_speed(translation_speed);
                                 } else {
                                     vulkan_app.set_x_speed(0.0);
                                 }

@@ -65,8 +65,9 @@ pub struct Image {
     pub (in super) img: vk::Image,
     mem: Option<vk::DeviceMemory>,
     pub (in super) extent: vk::Extent3D,
-    format: vk::Format,
+    pub (in super) format: vk::Format,
     image_type: vk::ImageType,
+    pub (in super) layout: vk::ImageLayout,
 }
 
 impl Image {
@@ -88,6 +89,7 @@ impl Image {
 	    extent,
 	    format,
 	    image_type,
+	    layout: vk::ImageLayout::UNDEFINED,
 	}
     }
 
@@ -170,11 +172,12 @@ impl Image {
             extent,
             format,
             image_type,
+	    layout: vk::ImageLayout::UNDEFINED,
         })
     }
 
     pub fn transition_layout(
-	&self,
+	&mut self,
         old_layout: vk::ImageLayout,
         new_layout: vk::ImageLayout,
         mip_levels: u32,
@@ -234,7 +237,9 @@ impl Image {
                     &image_barriers,
                 );
 		Ok(())
-            })
+            })?;
+	self.layout = new_layout;
+	Ok(())
     }
 
     pub fn copy_buffer(

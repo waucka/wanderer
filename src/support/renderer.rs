@@ -6,15 +6,11 @@ use std::ffi::CString;
 use std::time::{Instant, Duration};
 use std::rc::Rc;
 use std::ptr;
-use std::marker::PhantomData;
 
 use super::{Device, InnerDevice, Queue};
-use super::command_buffer::CommandBuffer;
 use super::image::{Image, ImageView, ImageBuilder};
-use super::texture::Texture;
-use super::buffer::{VertexBuffer, IndexBuffer, UniformBuffer, HasBuffer};
-use super::texture::Sampler;
 use super::shader::{VertexShader, FragmentShader, Vertex, GenericShader};
+use super::descriptor::DescriptorSetLayout;
 
 pub struct Presenter {
     device: Rc<InnerDevice>,
@@ -31,7 +27,6 @@ pub struct Presenter {
     current_frame: usize,
     desired_fps: u32,
 
-    graphics_queue: Rc<Queue>,
     present_queue: Rc<Queue>,
 }
 
@@ -80,6 +75,7 @@ impl Presenter {
 	// TODO: decide if I want to couple the in-flight image limit
 	// to the swapchain size or not.
 	let max_frames_in_flight = swapchain.get_num_images();
+	dbg!(max_frames_in_flight);
 
 	for _ in 0..max_frames_in_flight {
             unsafe {
@@ -113,7 +109,6 @@ impl Presenter {
 	    last_frame_duration: Duration::new(0, 0),
 	    desired_fps,
 
-	    graphics_queue: device.inner.get_default_graphics_queue(),
 	    present_queue: device.inner.get_default_present_queue(),
 	})
     }
@@ -213,9 +208,9 @@ impl Presenter {
     // WHY THE FUCK WOULD THAT EVER HAPPEN?  Changing the color depth?
     // What is this, 1998?  I had to look up how to do that on a modern OS.
     // I'm not going to all that trouble to support people doing weird shit.
-    // Fuck that.  Apparently, it's the same deal for the pipeline.
-    // So, fuck that, too.  That leaves us with the command buffers, which
-    // are currently the user's responsibility.  I hope to sidestep that in some way.
+    // Fuck that.  It looks like I can't avoid it for the pipeline, so I'll
+    // have to figure out how to signal the engine to do that.
+    // Same deal with the command buffers.
     pub fn fit_to_window(&mut self) -> anyhow::Result<()> {
         unsafe {
             self.device.device
@@ -238,7 +233,7 @@ impl Presenter {
 	self.swapchain.frames.len()
     }
 
-    pub fn submit_graphics_command_buffer(
+    /*pub fn submit_graphics_command_buffer(
 	&self,
 	command_buffer: &CommandBuffer,
     ) -> anyhow::Result<()> {
@@ -249,12 +244,22 @@ impl Presenter {
 	    self.render_finished_semaphores[self.current_frame],
 	    self.inflight_fences[self.current_frame],
 	)
+}*/
+
+    pub fn get_sync_objects(&self) -> (vk::Semaphore, vk::Semaphore, vk::Fence) {
+	(
+	    self.image_available_semaphores[self.current_frame],
+	    self.render_finished_semaphores[self.current_frame],
+	    self.inflight_fences[self.current_frame],
+	)
     }
 
     pub fn present_frame<F>(&mut self, image_index: u32, viewport_update: &mut F) -> anyhow::Result<()>
     where
         F: FnMut(usize, usize) -> anyhow::Result<()>
     {
+	//println!("Presenting a frame...");
+	//let start = std::time::Instant::now();
         let swapchains = [self.swapchain.swapchain];
 	let signal_semaphores = [self.render_finished_semaphores[self.current_frame]];
         let present_info = vk::PresentInfoKHR{
@@ -290,6 +295,7 @@ impl Presenter {
         self.current_frame = (self.current_frame + 1) % self.get_swapchain_image_count();
 	self.last_frame_duration = self.last_frame.elapsed();
         self.last_frame = Instant::now();
+	//println!("Presented frame in {}ns", start.elapsed().as_nanos());
 	Ok(())
     }
 }
@@ -404,6 +410,9 @@ impl Swapchain {
 	} else {
             image_count
 	};
+	dbg!(swapchain_support.capabilities.min_image_count);
+	dbg!(swapchain_support.capabilities.max_image_count);
+	dbg!(image_count);
 
 	let (image_sharing_mode, queue_family_indices) =
             if device.get_default_graphics_queue() != device.get_default_present_queue() {
@@ -575,501 +584,22 @@ impl Drop for Swapchain {
     }
 }
 
-////////////////////////////////////////////////////////////////////////////////
-#[allow(unused)]
-pub const GLOBAL_UNIFORM_SET: u32 = 0;
-//------------------------------------------------------------------------------
-pub const GLOBAL_UNIFORM_BINDING: u32 = 0;
-
-////////////////////////////////////////////////////////////////////////////////
-#[allow(unused)]
-pub const TYPE_UNIFORM_SET: u32 = 1;
-//------------------------------------------------------------------------------
-pub const TYPE_UNIFORM_BINDING: u32 = 0;
-pub const TEXTURE_ARRAY_BINDING: u32 = 1;
-
-////////////////////////////////////////////////////////////////////////////////
-#[allow(unused)]
-pub const INSTANCE_UNIFORM_SET: u32 = 2;
-//------------------------------------------------------------------------------
-pub const INSTANCE_UNIFORM_BINDING: u32 = 0;
-
-pub struct UniformSet<T> {
-    uniform_struct: T,
-    uniform_buffers: Vec<UniformBuffer<T>>,
-}
-
-impl<T> UniformSet<T> {
-    pub fn new(
-	device: &Device,
-	uniform_struct: T,
-	num_swapchain_images: usize,
-    ) -> anyhow::Result<Self> {
-	let mut uniform_buffers = vec![];
-	for _ in 0..num_swapchain_images {
-	    uniform_buffers.push(UniformBuffer::new(device, Some(&uniform_struct))?);
-	}
-	Ok(Self{
-	    uniform_struct,
-	    uniform_buffers,
-	})
-    }
-
-    // Alters the uniform data and uploads it to the selected GPU buffer
-    pub fn update_and_upload<F, R>(&mut self, i: usize, update_fn: F) -> anyhow::Result<R>
-    where
-	F: Fn(&mut T) -> anyhow::Result<R>
-    {
-	if i > self.uniform_buffers.len() {
-	    return Err(anyhow!(
-		"Attempted to update uniform buffer #{} of {}",
-		i+1,
-		self.uniform_buffers.len(),
-	    ));
-	}
-	let result = update_fn(&mut self.uniform_struct)?;
-	self.uniform_buffers[i].update(&self.uniform_struct)?;
-	Ok(result)
-    }
-
-    // Alters the uniform data without altering any GPU buffers
-    pub fn update<F, R>(&mut self, update_fn: F) -> anyhow::Result<R>
-    where
-	F: Fn(&mut T) -> anyhow::Result<R>
-    {
-	update_fn(&mut self.uniform_struct)
-    }
-
-    // Uploads whatever is currently in the uniform data to the selected GPU buffer
-    #[allow(unused)]
-    pub fn sync(&mut self, i: usize) -> anyhow::Result<()> {
-	if i > self.uniform_buffers.len() {
-	    return Err(anyhow!(
-		"Attempted to sync uniform buffer #{} of {}",
-		i+1,
-		self.uniform_buffers.len(),
-	    ));
-	}
-	self.uniform_buffers[i].update(&self.uniform_struct)
-    }
-
-    pub fn len(&self) -> usize {
-	self.uniform_buffers.len()
-    }
-
-    #[allow(unused)]
-    fn get_buffer(&self, i: usize) -> anyhow::Result<&UniformBuffer<T>> {
-	if i < self.uniform_buffers.len() {
-	    Ok(&self.uniform_buffers[i])
-	} else {
-	    Err(anyhow!(
-		"Index out of range ({} uniform buffers, index {})",
-		self.uniform_buffers.len(),
-		i,
-	    ))
-	}
-    }
-
-    fn get_buffer_unchecked(&self, i: usize) -> &UniformBuffer<T> {
-	&self.uniform_buffers[i]
-    }
-}
-
-pub struct ObjectType<T, I> {
-    uniform_set: UniformSet<T>,
-    uniform_layout: DescriptorSetLayout,
-    textures: Vec<(Rc<Sampler>, Rc<Texture>)>,
-    type_pool: DescriptorPool,
-    instance_pool: DescriptorPool,
-    _phantom_t: PhantomData<T>,
-    _phantom_i: PhantomData<I>,
-}
-
-impl<T, I> ObjectType<T, I> {
-    pub fn new(
-	device: &Device,
-	uniform_struct: T,
-	textures: Vec<(Rc<Sampler>, Rc<Texture>)>,
-	num_swapchain_images: usize,
-    ) -> anyhow::Result<Self> {
-	let type_uniform_bindings = [
-	    // TODO: OH GOD THIS IS IN TWO PLACES
-	    vk::DescriptorSetLayoutBinding{
-		binding: TYPE_UNIFORM_BINDING,
-		descriptor_type: vk::DescriptorType::UNIFORM_BUFFER,
-		descriptor_count: 1,
-		// TODO: is ALL the right choice here?
-		stage_flags: vk::ShaderStageFlags::ALL,
-		p_immutable_samplers: ptr::null(),
-	    },
-	    vk::DescriptorSetLayoutBinding{
-		binding: TEXTURE_ARRAY_BINDING,
-		descriptor_type: vk::DescriptorType::COMBINED_IMAGE_SAMPLER,
-		descriptor_count: textures.len() as u32,
-		stage_flags: vk::ShaderStageFlags::FRAGMENT,
-		p_immutable_samplers: ptr::null(),
-	    },
-	];
-	let type_layout_info = vk::DescriptorSetLayoutCreateInfo{
-	    s_type: vk::StructureType::DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
-	    p_next: ptr::null(),
-	    flags: vk::DescriptorSetLayoutCreateFlags::empty(),
-	    binding_count: type_uniform_bindings.len() as u32,
-	    p_bindings: type_uniform_bindings.as_ptr(),
-	};
-	let uniform_layout = DescriptorSetLayout{
-	    device: device.inner.clone(),
-	    layout: unsafe {
-		device.inner.device.create_descriptor_set_layout(&type_layout_info, None)?
-	    },
-	};
-	Ok(Self{
-	    uniform_set: UniformSet::new(device, uniform_struct, num_swapchain_images)?,
-	    uniform_layout,
-	    textures,
-	    // TODO: automatically allocate more pools when these are exhausted.
-	    type_pool: DescriptorPool::from_layout_bindings(
-		device,
-		&type_uniform_bindings,
-		// 10 was too few here, and I don't know why.
-		20,
-	    )?,
-	    // TODO: this has to be kept in sync with the stuff in RenderObject, which is
-	    //       error-prone.  Find a better way.
-	    instance_pool: DescriptorPool::new(
-		device,
-		&vec![(vk::DescriptorType::UNIFORM_BUFFER, 1)],
-		1000,
-	    )?,
-	    _phantom_t: PhantomData,
-	    _phantom_i: PhantomData,
-	})
-    }
-
-    #[allow(unused)]
-    pub fn get_uniform_set(&mut self) -> &mut UniformSet<T> {
-	&mut self.uniform_set
-    }
-
-    pub fn create_descriptor_sets(
-	&self,
-	device: &Device,
-    ) -> anyhow::Result<Vec<vk::DescriptorSet>> {
-	let num_swapchain_images = self.uniform_set.len();
-	let mut layouts: Vec<vk::DescriptorSetLayout> = vec![];
-        for _ in 0..num_swapchain_images {
-            layouts.push(self.uniform_layout.layout);
-        }
-
-        let descriptor_set_allocate_info = vk::DescriptorSetAllocateInfo{
-            s_type: vk::StructureType::DESCRIPTOR_SET_ALLOCATE_INFO,
-            p_next: ptr::null(),
-            descriptor_pool: self.type_pool.pool,
-            descriptor_set_count: num_swapchain_images as u32,
-            p_set_layouts: layouts.as_ptr(),
-        };
-
-        let descriptor_sets = unsafe {
-            device.inner.device
-                .allocate_descriptor_sets(&descriptor_set_allocate_info)?
-        };
-
-        for i in 0..num_swapchain_images {
-	    // The provenance of num_swapchain_images means i is never out of range.
-	    let uniform_buffer = self.uniform_set.get_buffer_unchecked(i);
-	    let uniform_buffer_info = [vk::DescriptorBufferInfo{
-		buffer: uniform_buffer.get_buffer(),
-		offset: 0,
-		range: uniform_buffer.len(),
-	    }];
-
-	    let mut image_descriptor_infos = vec![];
-	    for (sampler, texture) in self.textures.iter() {
-		image_descriptor_infos.push(vk::DescriptorImageInfo{
-		    sampler: sampler.sampler,
-		    image_view: texture.image_view.view,
-		    image_layout: vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
-		});
-	    }
-
-	    let descriptor_write_sets = vec![
-		vk::WriteDescriptorSet{
-		    s_type: vk::StructureType::WRITE_DESCRIPTOR_SET,
-		    p_next: ptr::null(),
-		    dst_set: descriptor_sets[i],
-		    dst_binding: TYPE_UNIFORM_BINDING,
-		    dst_array_element: 0,
-		    descriptor_count: 1,
-		    descriptor_type: vk::DescriptorType::UNIFORM_BUFFER,
-		    p_image_info: ptr::null(),
-		    p_buffer_info: uniform_buffer_info.as_ptr(),
-		    p_texel_buffer_view: ptr::null(),
-		},
-		vk::WriteDescriptorSet{
-		    s_type: vk::StructureType::WRITE_DESCRIPTOR_SET,
-		    p_next: ptr::null(),
-		    dst_set: descriptor_sets[i],
-		    dst_binding: TEXTURE_ARRAY_BINDING,
-		    dst_array_element: 0,
-		    descriptor_count: image_descriptor_infos.len() as u32,
-		    descriptor_type: vk::DescriptorType::COMBINED_IMAGE_SAMPLER,
-		    p_image_info: image_descriptor_infos.as_ptr(),
-		    p_buffer_info: ptr::null(),
-		    p_texel_buffer_view: ptr::null(),
-		},
-	    ];
-            unsafe {
-                device.inner.device.update_descriptor_sets(&descriptor_write_sets, &[]);
-            }
-	}
-	Ok(descriptor_sets)
-    }
-}
-
-// Type parameters are uniform types for global, per-type, and per-instance data.
-pub struct RenderObject<G, T, I> {
-    _phantom: PhantomData<G>,
-    obj_type: Rc<ObjectType<T, I>>,
-    uniform_set: UniformSet<I>,
-    uniform_layout: DescriptorSetLayout,
-}
-
-impl<G, T, I> RenderObject<G, T, I> {
-    pub fn new(
-	device: &Device,
-	obj_type: Rc<ObjectType<T, I>>,
-	obj_uniform: I,
-    ) -> anyhow::Result<Self> {
-	let instance_uniform_bindings = [vk::DescriptorSetLayoutBinding{
-	    binding: INSTANCE_UNIFORM_BINDING,
-	    descriptor_type: vk::DescriptorType::UNIFORM_BUFFER,
-	    descriptor_count: 1,
-	    // TODO: is ALL the right choice here?
-	    stage_flags: vk::ShaderStageFlags::ALL,
-	    p_immutable_samplers: ptr::null(),
-	}];
-	let instance_layout_info = vk::DescriptorSetLayoutCreateInfo{
-	    s_type: vk::StructureType::DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
-	    p_next: ptr::null(),
-	    flags: vk::DescriptorSetLayoutCreateFlags::empty(),
-	    binding_count: 1,
-	    p_bindings: instance_uniform_bindings.as_ptr(),
-	};
-	let uniform_layout = DescriptorSetLayout{
-	    device: device.inner.clone(),
-	    layout: unsafe {
-		device.inner.device.create_descriptor_set_layout(&instance_layout_info, None)?
-	    },
-	};
-
-	Ok(Self{
-	    _phantom: PhantomData,
-	    obj_type: obj_type.clone(),
-	    uniform_set: UniformSet::new(device, obj_uniform, obj_type.uniform_set.len())?,
-	    uniform_layout,
-	})
-    }
-
-    #[allow(unused)]
-    pub fn get_uniform_set(&mut self) -> &mut UniformSet<I> {
-	&mut self.uniform_set
-    }
-
-    pub fn create_descriptor_sets(
-	&self,
-	device: &Device,
-    ) -> anyhow::Result<Vec<vk::DescriptorSet>> {
-	let num_swapchain_images = self.uniform_set.len();
-	let mut layouts: Vec<vk::DescriptorSetLayout> = vec![];
-        for _ in 0..num_swapchain_images {
-            layouts.push(self.uniform_layout.layout);
-        }
-
-        let descriptor_set_allocate_info = vk::DescriptorSetAllocateInfo{
-            s_type: vk::StructureType::DESCRIPTOR_SET_ALLOCATE_INFO,
-            p_next: ptr::null(),
-            descriptor_pool: self.obj_type.instance_pool.pool,
-            descriptor_set_count: num_swapchain_images as u32,
-            p_set_layouts: layouts.as_ptr(),
-        };
-
-        let descriptor_sets = unsafe {
-            device.inner.device
-                .allocate_descriptor_sets(&descriptor_set_allocate_info)?
-        };
-
-        for i in 0..num_swapchain_images {
-	    // The provenance of num_swapchain_images ensures this will never fail.
-	    let uniform_buffer = self.uniform_set.get_buffer_unchecked(i);
-	    let uniform_buffer_info = [vk::DescriptorBufferInfo{
-		buffer: uniform_buffer.get_buffer(),
-		offset: 0,
-		range: uniform_buffer.len(),
-	    }];
-
-	    let descriptor_write_sets = vec![
-		vk::WriteDescriptorSet{
-		    s_type: vk::StructureType::WRITE_DESCRIPTOR_SET,
-		    p_next: ptr::null(),
-		    dst_set: descriptor_sets[i],
-		    dst_binding: TYPE_UNIFORM_BINDING,
-		    dst_array_element: 0,
-		    descriptor_count: 1,
-		    descriptor_type: vk::DescriptorType::UNIFORM_BUFFER,
-		    p_image_info: ptr::null(),
-		    p_buffer_info: uniform_buffer_info.as_ptr(),
-		    p_texel_buffer_view: ptr::null(),
-		},
-	    ];
-            unsafe {
-                device.inner.device.update_descriptor_sets(&descriptor_write_sets, &[]);
-            }
-	}
-	Ok(descriptor_sets)
-    }
-
-    pub fn write_draw_command<V>(
-	&self,
-	writer: super::command_buffer::RenderPass,
-	renderer: &ObjectTypeRenderer<V, G, T, I>,
-	vbo: &VertexBuffer<V>,
-	ibo: &IndexBuffer,
-	descriptor_sets: &[vk::DescriptorSet],
-    ) where V: Vertex {
-	writer.bind_pipeline(renderer.pipeline.pipeline);
-	writer.draw_indexed(
-	    renderer.pipeline_layout,
-	    vbo,
-	    ibo,
-	    &descriptor_sets,
-	);
-    }
-}
-
-pub struct GlobalUniform<G> {
-    uniform_set: UniformSet<G>, 
-    uniform_layout: DescriptorSetLayout,
-    global_pool: DescriptorPool,
-}
-
-impl<G> GlobalUniform<G> {
-    pub fn new(
-	device: &Device,
-	uniform_struct: G,
-	num_swapchain_images: usize,
-    ) -> anyhow::Result<Self> {
-	let uniform_set = UniformSet::new(device, uniform_struct, num_swapchain_images)?;
-	let global_uniform_bindings = [vk::DescriptorSetLayoutBinding{
-	    binding: GLOBAL_UNIFORM_BINDING,
-	    descriptor_type: vk::DescriptorType::UNIFORM_BUFFER,
-	    descriptor_count: 1,
-	    // TODO: is ALL the right choice here?
-	    stage_flags: vk::ShaderStageFlags::ALL,
-	    p_immutable_samplers: ptr::null(),
-	}];
-	let global_layout_info = vk::DescriptorSetLayoutCreateInfo{
-	    s_type: vk::StructureType::DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
-	    p_next: ptr::null(),
-	    flags: vk::DescriptorSetLayoutCreateFlags::empty(),
-	    binding_count: 1,
-	    p_bindings: global_uniform_bindings.as_ptr(),
-	};
-	Ok(Self{
-	    uniform_set,
-	    uniform_layout: DescriptorSetLayout{
-		device: device.inner.clone(),
-		layout: unsafe {
-		    device.inner.device.create_descriptor_set_layout(&global_layout_info, None)?
-		},
-	    },
-	    global_pool: DescriptorPool::new(
-		device,
-		&vec![(vk::DescriptorType::UNIFORM_BUFFER, 1)],
-		// 10 was too few here, and I don't know why.
-		20,
-	    )?,
-	})
-    }
-
-    pub fn get_uniform_set(&mut self) -> &mut UniformSet<G> {
-	&mut self.uniform_set
-    }
-
-    pub fn create_descriptor_sets(
-	&self,
-	device: &Device,
-    ) -> anyhow::Result<Vec<vk::DescriptorSet>> {
-	let num_swapchain_images = self.uniform_set.len();
-	let mut layouts: Vec<vk::DescriptorSetLayout> = vec![];
-        for _ in 0..num_swapchain_images {
-            layouts.push(self.uniform_layout.layout);
-        }
-
-        let descriptor_set_allocate_info = vk::DescriptorSetAllocateInfo{
-            s_type: vk::StructureType::DESCRIPTOR_SET_ALLOCATE_INFO,
-            p_next: ptr::null(),
-            descriptor_pool: self.global_pool.pool,
-            descriptor_set_count: num_swapchain_images as u32,
-            p_set_layouts: layouts.as_ptr(),
-        };
-
-        let descriptor_sets = unsafe {
-            device.inner.device
-                .allocate_descriptor_sets(&descriptor_set_allocate_info)?
-        };
-
-        for i in 0..num_swapchain_images {
-	    // The provenance of num_swapchain_images ensures this will never fail.
-	    let uniform_buffer = self.uniform_set.get_buffer_unchecked(i);
-	    let uniform_buffer_info = [vk::DescriptorBufferInfo{
-		buffer: uniform_buffer.get_buffer(),
-		offset: 0,
-		range: uniform_buffer.len(),
-	    }];
-
-	    let descriptor_write_sets = vec![
-		vk::WriteDescriptorSet{
-		    s_type: vk::StructureType::WRITE_DESCRIPTOR_SET,
-		    p_next: ptr::null(),
-		    dst_set: descriptor_sets[i],
-		    dst_binding: INSTANCE_UNIFORM_BINDING,
-		    dst_array_element: 0,
-		    descriptor_count: 1,
-		    descriptor_type: vk::DescriptorType::UNIFORM_BUFFER,
-		    p_image_info: ptr::null(),
-		    p_buffer_info: uniform_buffer_info.as_ptr(),
-		    p_texel_buffer_view: ptr::null(),
-		},
-	    ];
-            unsafe {
-                device.inner.device.update_descriptor_sets(&descriptor_write_sets, &[]);
-            }
-	}
-	Ok(descriptor_sets)
-    }
-}
-
-// Type parameters are:
-//  * V: vertex type
-//  * G: global uniform type
-//  * T: uniform type for type-specific globals
-//  * I: uniform type for per-instance data
-pub struct ObjectTypeRenderer<V, G, T, I> where V: Vertex {
+pub struct Pipeline<V>
+where
+    V: Vertex,
+{
     device: Rc<InnerDevice>,
-    _global_uniform_layout: DescriptorSetLayout,
-    _type_uniform_layout: DescriptorSetLayout,
-    _instance_uniform_layout: DescriptorSetLayout,
     pipeline_layout: vk::PipelineLayout,
-    pipeline: Pipeline,
+    pub (in super) pipeline: vk::Pipeline,
     vert_shader: VertexShader<V>,
     frag_shader: FragmentShader,
     msaa_samples: vk::SampleCountFlags,
-    _phantom_g: PhantomData<G>,
-    _phantom_t: PhantomData<T>,
-    _phantom_i: PhantomData<I>,
 }
 
-impl<V, G, T, I> ObjectTypeRenderer<V, G, T, I>  where V: Vertex {
+impl<V> Pipeline<V>
+where
+    V: Vertex,
+{
     fn from_inner(
 	device: Rc<InnerDevice>,
 	viewport_width: usize,
@@ -1078,82 +608,19 @@ impl<V, G, T, I> ObjectTypeRenderer<V, G, T, I>  where V: Vertex {
 	vert_shader: VertexShader<V>,
 	frag_shader: FragmentShader,
 	msaa_samples: vk::SampleCountFlags,
-	num_textures: usize,
+	set_layouts: &[&DescriptorSetLayout],
     ) -> anyhow::Result<Self> {
-	let set_layouts = {
-	    let global_uniform_bindings = [vk::DescriptorSetLayoutBinding{
-		binding: GLOBAL_UNIFORM_BINDING,
-		descriptor_type: vk::DescriptorType::UNIFORM_BUFFER,
-		descriptor_count: 1,
-		// TODO: is ALL the right choice here?
-		stage_flags: vk::ShaderStageFlags::ALL,
-		p_immutable_samplers: ptr::null(),
-	    }];
-
-	    // TODO: OH GOD THIS IS IN TWO PLACES
-	    let type_uniform_bindings = [
-		vk::DescriptorSetLayoutBinding{
-		    binding: TYPE_UNIFORM_BINDING,
-		    descriptor_type: vk::DescriptorType::UNIFORM_BUFFER,
-		    descriptor_count: 1,
-		    // TODO: is ALL the right choice here?
-		    stage_flags: vk::ShaderStageFlags::ALL,
-		    p_immutable_samplers: ptr::null(),
-		},
-		vk::DescriptorSetLayoutBinding{
-		    binding: TEXTURE_ARRAY_BINDING,
-		    descriptor_type: vk::DescriptorType::COMBINED_IMAGE_SAMPLER,
-		    descriptor_count: num_textures as u32,
-		    stage_flags: vk::ShaderStageFlags::FRAGMENT,
-		    p_immutable_samplers: ptr::null(),
-		},
-	    ];
-
-	    let instance_uniform_bindings = [vk::DescriptorSetLayoutBinding{
-		binding: INSTANCE_UNIFORM_BINDING,
-		descriptor_type: vk::DescriptorType::UNIFORM_BUFFER,
-		descriptor_count: 1,
-		// TODO: is ALL the right choice here?
-		stage_flags: vk::ShaderStageFlags::ALL,
-		p_immutable_samplers: ptr::null(),
-	    }];
-
-	    let global_layout_info = vk::DescriptorSetLayoutCreateInfo{
-		s_type: vk::StructureType::DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
-		p_next: ptr::null(),
-		flags: vk::DescriptorSetLayoutCreateFlags::empty(),
-		binding_count: global_uniform_bindings.len() as u32,
-		p_bindings: global_uniform_bindings.as_ptr(),
-	    };
-	    let type_layout_info = vk::DescriptorSetLayoutCreateInfo{
-		s_type: vk::StructureType::DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
-		p_next: ptr::null(),
-		flags: vk::DescriptorSetLayoutCreateFlags::empty(),
-		binding_count: type_uniform_bindings.len() as u32,
-		p_bindings: type_uniform_bindings.as_ptr(),
-	    };
-	    let instance_layout_info = vk::DescriptorSetLayoutCreateInfo{
-		s_type: vk::StructureType::DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
-		p_next: ptr::null(),
-		flags: vk::DescriptorSetLayoutCreateFlags::empty(),
-		binding_count: instance_uniform_bindings.len() as u32,
-		p_bindings: instance_uniform_bindings.as_ptr(),
-	    };
-	    unsafe {
-		vec![
-		    device.device.create_descriptor_set_layout(&global_layout_info, None)?,
-		    device.device.create_descriptor_set_layout(&type_layout_info, None)?,
-		    device.device.create_descriptor_set_layout(&instance_layout_info, None)?,
-		]
-	    }
-	};
+	let mut vk_set_layouts = vec![];
+	for layout in set_layouts.iter() {
+	    vk_set_layouts.push(layout.layout);
+	}
 
 	let pipeline_layout_create_info = vk::PipelineLayoutCreateInfo{
             s_type: vk::StructureType::PIPELINE_LAYOUT_CREATE_INFO,
             p_next: ptr::null(),
             flags: vk::PipelineLayoutCreateFlags::empty(),
-            set_layout_count: set_layouts.len() as u32,
-            p_set_layouts: set_layouts.as_ptr(),
+            set_layout_count: vk_set_layouts.len() as u32,
+            p_set_layouts: vk_set_layouts.as_ptr(),
             push_constant_range_count: 0,
             p_push_constant_ranges: ptr::null(),
 	};
@@ -1178,17 +645,11 @@ impl<V, G, T, I> ObjectTypeRenderer<V, G, T, I>  where V: Vertex {
 
 	Ok(Self{
 	    device: device.clone(),
-	    _global_uniform_layout: DescriptorSetLayout::new(device.clone(), set_layouts[0]),
-	    _type_uniform_layout: DescriptorSetLayout::new(device.clone(), set_layouts[1]),
-	    _instance_uniform_layout: DescriptorSetLayout::new(device.clone(), set_layouts[2]),
 	    pipeline_layout,
 	    pipeline,
 	    vert_shader,
 	    frag_shader,
 	    msaa_samples,
-	    _phantom_g: PhantomData,
-	    _phantom_t: PhantomData,
-	    _phantom_i: PhantomData,
 	})
     }
 
@@ -1200,7 +661,7 @@ impl<V, G, T, I> ObjectTypeRenderer<V, G, T, I>  where V: Vertex {
 	vert_shader: VertexShader<V>,
 	frag_shader: FragmentShader,
 	msaa_samples: vk::SampleCountFlags,
-	num_textures: usize,
+	set_layouts: &[&DescriptorSetLayout],
     ) -> anyhow::Result<Self> {
 	Self::from_inner(
 	    device.inner.clone(),
@@ -1210,7 +671,7 @@ impl<V, G, T, I> ObjectTypeRenderer<V, G, T, I>  where V: Vertex {
 	    vert_shader,
 	    frag_shader,
 	    msaa_samples,
-	    num_textures,
+	    set_layouts,
 	)
     }
 
@@ -1223,7 +684,7 @@ impl<V, G, T, I> ObjectTypeRenderer<V, G, T, I>  where V: Vertex {
 	vert_shader_module: vk::ShaderModule,
 	frag_shader_module: vk::ShaderModule,
 	msaa_samples: vk::SampleCountFlags,
-    ) -> anyhow::Result<Pipeline> {
+    ) -> anyhow::Result<vk::Pipeline> {
 	let main_function_name = CString::new("main").unwrap();
 
 	let shader_stages = [
@@ -1397,16 +858,12 @@ impl<V, G, T, I> ObjectTypeRenderer<V, G, T, I>  where V: Vertex {
                     None,
 		) {
 		    Ok(p) => p,
-		    Err(_) => return Err(
-			anyhow!("Pipeline creation failed; this API sucks balls, so no more info for you.")
+		    Err((_, res)) => return Err(
+			anyhow!("Pipeline creation failed: {:?}", res)
 		    ),
 		}
 	};
-
-	Ok(Pipeline{
-	    device: device,
-	    pipeline: pipelines[0],
-	})
+	Ok(pipelines[0])
     }
 
     pub fn update_viewport(
@@ -1430,49 +887,20 @@ impl<V, G, T, I> ObjectTypeRenderer<V, G, T, I>  where V: Vertex {
 	self.pipeline = pipeline;
 	Ok(())
     }
-}
 
-impl<V, G, T, I> Drop for ObjectTypeRenderer<V, G, T, I>  where V: Vertex {
-    fn drop(&mut self) {
-	unsafe {
-	    self.device.device.destroy_pipeline_layout(self.pipeline_layout, None);
-	}
+    pub fn get_layout(&self) -> vk::PipelineLayout {
+	self.pipeline_layout
     }
 }
 
-struct DescriptorSetLayout {
-    device: Rc<InnerDevice>,
-    layout: vk::DescriptorSetLayout,
-}
-
-impl DescriptorSetLayout {
-    fn new(device: Rc<InnerDevice>, layout: vk::DescriptorSetLayout) -> Self {
-	//println!("Creating a DescriptorSetLayout...");
-	Self{
-	    device,
-	    layout,
-	}
-    }
-}
-
-impl Drop for DescriptorSetLayout {
-    fn drop(&mut self) {
-	//println!("Dropping a DescriptorSetLayout...");
-	unsafe {
-	    self.device.device.destroy_descriptor_set_layout(self.layout, None);
-	}
-    }
-}
-
-struct Pipeline {
-    device: Rc<InnerDevice>,
-    pipeline: vk::Pipeline,
-}
-
-impl Drop for Pipeline {
+impl<V> Drop for Pipeline<V>
+where
+    V: Vertex,
+{
     fn drop(&mut self) {
 	unsafe {
 	    self.device.device.destroy_pipeline(self.pipeline, None);
+	    self.device.device.destroy_pipeline_layout(self.pipeline_layout, None);
 	}
     }
 }
@@ -1592,85 +1020,6 @@ impl Drop for RenderPass {
     fn drop(&mut self) {
 	unsafe {
 	    self.device.device.destroy_render_pass(self.render_pass, None);
-	}
-    }
-}
-
-struct DescriptorPool {
-    device: Rc<InnerDevice>,
-    pool: vk::DescriptorPool,
-}
-
-impl DescriptorPool {
-    fn new(
-	device: &Device,
-	descriptors: &Vec<(vk::DescriptorType, u32)>,
-	capacity: u32,
-    ) -> anyhow::Result<Self> {
-	let mut unique_sizes = std::collections::HashMap::new();
-	for (ty, descriptor_count) in descriptors.iter() {
-	    match unique_sizes.get_mut(ty) {
-		Some(val) => {
-		    *val += *descriptor_count;
-		},
-		None => {
-		    unique_sizes.insert(*ty, *descriptor_count);
-		},
-	    };
-	}
-	let mut sizes = vec![];
-	for (ty, descriptor_count) in unique_sizes.iter() {
-	    sizes.push(vk::DescriptorPoolSize{
-		ty: *ty,
-		descriptor_count: *descriptor_count,
-	    });
-	}
-	let create_info = vk::DescriptorPoolCreateInfo{
-	    s_type: vk::StructureType::DESCRIPTOR_POOL_CREATE_INFO,
-	    p_next: ptr::null(),
-	    flags: vk::DescriptorPoolCreateFlags::empty(),
-	    max_sets: capacity,
-	    pool_size_count: sizes.len() as u32,
-	    p_pool_sizes: sizes.as_ptr(),
-	};
-	Ok(Self{
-	    device: device.inner.clone(),
-	    pool: unsafe {
-		device.inner.device.create_descriptor_pool(&create_info, None)?
-	    },
-	})
-    }
-
-    fn from_layout_bindings(
-	device: &Device,
-	layout_bindings: &[vk::DescriptorSetLayoutBinding],
-	capacity: u32,
-    ) -> anyhow::Result<Self> {
-	let mut descriptors = vec![];
-	for binding in layout_bindings.iter() {
-	    descriptors.push((binding.descriptor_type, binding.descriptor_count));
-	}
-	Self::new(device, &descriptors, capacity)
-    }
-
-    // TODO: consider making this error out if any descriptor sets are still
-    //       "at large" (e.g. store sets in objects that implement Drop and keep count).
-    #[allow(unused)]
-    fn reset(&self) -> anyhow::Result<()> {
-	unsafe {
-	    self.device.device.reset_descriptor_pool(
-		self.pool,
-		vk::DescriptorPoolResetFlags::empty(),
-	    )?;
-	}
-	Ok(())
-    }
-}
-
-impl Drop for DescriptorPool {
-    fn drop(&mut self) {
-	unsafe {
-	    self.device.device.destroy_descriptor_pool(self.pool, None);
 	}
     }
 }

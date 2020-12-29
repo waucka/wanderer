@@ -1,17 +1,19 @@
 use ash::version::DeviceV1_0;
 use ash::vk;
 
+use std::cell::RefCell;
 use std::rc::Rc;
 use std::ptr;
 
 use super::{Device, InnerDevice, Queue};
-use super::renderer::Presenter;
+use super::renderer::{Presenter, Pipeline};
 use super::buffer::{VertexBuffer, IndexBuffer, UploadSourceBuffer, HasBuffer};
 use super::image::Image;
+use super::shader::Vertex;
 
 pub struct CommandBuffer {
     device: Rc<InnerDevice>,
-    command_pool: vk::CommandPool,
+    queue: Rc<Queue>,
     buf: vk::CommandBuffer,
 }
 
@@ -21,19 +23,19 @@ impl CommandBuffer {
 	level: vk::CommandBufferLevel,
 	queue: Rc<Queue>,
     ) -> anyhow::Result<Self> {
-	CommandBuffer::from_inner_device(device.inner.clone(), level, queue.command_pool)
+	CommandBuffer::from_inner_device(device.inner.clone(), level, queue)
     }
 
     fn from_inner_device(
 	device: Rc<InnerDevice>,
 	level: vk::CommandBufferLevel,
-	command_pool: vk::CommandPool,
+	queue: Rc<Queue>,
     ) -> anyhow::Result<Self> {
         let command_buffer_allocate_info = vk::CommandBufferAllocateInfo{
             s_type: vk::StructureType::COMMAND_BUFFER_ALLOCATE_INFO,
             p_next: ptr::null(),
             command_buffer_count: 1,
-            command_pool: command_pool,
+            command_pool: queue.command_pool,
             level,
         };
 
@@ -45,7 +47,7 @@ impl CommandBuffer {
 	Ok(Self{
 	    device,
 	    buf: command_buffer,
-	    command_pool,
+	    queue,
 	})
     }
 
@@ -70,7 +72,6 @@ impl CommandBuffer {
 
     pub fn submit_synced(
 	&self,
-	queue: Rc<Queue>,
 	wait_stage: vk::PipelineStageFlags,
 	image_available_semaphore: vk::Semaphore,
 	render_finished_semaphore: vk::Semaphore,
@@ -98,7 +99,7 @@ impl CommandBuffer {
                 .reset_fences(&wait_fences)?;
             self.device.device
                 .queue_submit(
-                    queue.get(),
+                    self.queue.get(),
                     &submit_infos,
                     inflight_fence,
                 )?;
@@ -108,7 +109,6 @@ impl CommandBuffer {
 
     pub fn submit_unsynced(
         &self,
-	queue: Rc<Queue>,
     ) -> anyhow::Result<()> {
         let buffers_to_submit = [self.buf];
 
@@ -126,9 +126,10 @@ impl CommandBuffer {
 
         unsafe {
             self.device.device
-                .queue_submit(queue.get(), &submit_infos, vk::Fence::null())?;
+                .queue_submit(self.queue.get(), &submit_infos, vk::Fence::null())?;
+	    // TODO: do I actually want to do this wait here?
             self.device.device
-                .queue_wait_idle(queue.get())?;
+                .queue_wait_idle(self.queue.get())?;
         }
 
         Ok(())
@@ -141,7 +142,7 @@ impl CommandBuffer {
 	cmd_fn: T,
     ) -> anyhow::Result<()>
     where
-        T: Fn(&BufferWriter) -> anyhow::Result<()>
+        T: FnMut(&BufferWriter) -> anyhow::Result<()>
     {
 	CommandBuffer::run_oneshot_internal(device.inner.clone(), queue, cmd_fn)
     }
@@ -149,21 +150,21 @@ impl CommandBuffer {
     pub (in super) fn run_oneshot_internal<T>(
 	device: Rc<InnerDevice>,
 	queue: Rc<Queue>,
-	cmd_fn: T,
+	mut cmd_fn: T,
     ) -> anyhow::Result<()>
     where
-        T: Fn(&BufferWriter) -> anyhow::Result<()>
+        T: FnMut(&BufferWriter) -> anyhow::Result<()>
     {
         let cmd_buf = CommandBuffer::from_inner_device(
 	    device,
 	    vk::CommandBufferLevel::PRIMARY,
-	    queue.command_pool,
+	    queue,
 	)?;
 	{
 	    let writer = cmd_buf.record(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT)?;
             cmd_fn(&writer)?;
 	}
-        cmd_buf.submit_unsynced(queue)?;
+        cmd_buf.submit_unsynced()?;
         Ok(())
     }
 }
@@ -172,7 +173,7 @@ impl Drop for CommandBuffer {
     fn drop(&mut self) {
 	let buffers = [self.buf];
 	unsafe {
-	    self.device.device.free_command_buffers(self.command_pool, &buffers);
+	    self.device.device.free_command_buffers(self.queue.command_pool, &buffers);
 	}
     }
 }
@@ -188,7 +189,7 @@ impl<'a> BufferWriter<'a> {
 	presenter: &Presenter,
 	clear_values: &[vk::ClearValue],
 	framebuffer_index: usize,
-    ) -> RenderPass {
+    ) -> RenderPassWriter {
 	let render_area = vk::Rect2D{
 	    offset: vk::Offset2D{
 		x: 0,
@@ -214,7 +215,7 @@ impl<'a> BufferWriter<'a> {
 	    );
 	}
 
-	RenderPass{
+	RenderPassWriter{
 	    device: self.device.clone(),
 	    command_buffer: self.command_buffer,
 	}
@@ -323,31 +324,46 @@ impl<'a> Drop for BufferWriter<'a> {
     }
 }
 
-pub struct RenderPass<'a> {
+pub struct RenderPassWriter<'a> {
     device: Rc<InnerDevice>,
     command_buffer: &'a CommandBuffer,
 }
 
-impl<'a> RenderPass<'a> {
-    pub fn bind_pipeline(
+impl<'a> RenderPassWriter<'a> {
+    pub fn bind_pipeline<V: Vertex>(
 	&self,
-	pipeline: vk::Pipeline,
+	pipeline: Rc<RefCell<Pipeline<V>>>,
     ) {
 	unsafe {
 	    self.device.device.cmd_bind_pipeline(
 		self.command_buffer.buf,
 		vk::PipelineBindPoint::GRAPHICS,
-		pipeline,
+		pipeline.borrow().pipeline,
+	    );
+	}
+    }
+
+    pub fn bind_descriptor_sets(
+	&self,
+	pipeline_layout: vk::PipelineLayout,
+	descriptor_sets: &[vk::DescriptorSet],
+    ) {
+	unsafe {
+	    self.device.device.cmd_bind_descriptor_sets(
+		self.command_buffer.buf,
+		vk::PipelineBindPoint::GRAPHICS,
+		pipeline_layout,
+		0,
+		&descriptor_sets,
+		&[],
 	    );
 	}
     }
 
     pub fn draw_indexed<T>(
 	&self,
-	pipeline_layout: vk::PipelineLayout,
 	vertex_buffer: &VertexBuffer<T>,
 	index_buffer: &IndexBuffer,
-	descriptor_sets: &[vk::DescriptorSet],
     ) {
 	let vertex_buffers = [vertex_buffer.get_buffer()];
 	let offsets = [0_u64];
@@ -365,14 +381,6 @@ impl<'a> RenderPass<'a> {
 		0,
 		vk::IndexType::UINT32,
 	    );
-	    self.device.device.cmd_bind_descriptor_sets(
-		self.command_buffer.buf,
-		vk::PipelineBindPoint::GRAPHICS,
-		pipeline_layout,
-		0,
-		&descriptor_sets,
-		&[],
-	    );
 	    self.device.device.cmd_draw_indexed(
 		self.command_buffer.buf,
 		index_buffer.len() as u32,
@@ -382,7 +390,7 @@ impl<'a> RenderPass<'a> {
     }
 }
 
-impl<'a> Drop for RenderPass<'a> {
+impl<'a> Drop for RenderPassWriter<'a> {
     fn drop(&mut self) {
 	unsafe {
 	    self.device.device.cmd_end_render_pass(self.command_buffer.buf);
