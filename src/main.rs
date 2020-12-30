@@ -227,6 +227,11 @@ impl VulkanApp21 {
 	    Matrix4::from_scale(1.0),
 	)?;
 
+	viking_room_geometry_set.add(
+	    &device,
+	    Matrix4::from_translation(Vector3::new(0.0, 0.0, 5.0)) * Matrix4::from_scale(0.5),
+	)?;
+
 	let set_layouts = [
 	    &global_descriptor_set_layout,
 	    viking_room_geometry_set.get_type_layout(),
@@ -325,6 +330,7 @@ impl VulkanApp21 {
                     + (view_up * camera_speed.z * delta_time)
                     + (view_dir * camera_speed.y * delta_time)
                     + (view_right * -camera_speed.x * delta_time);
+		uniform_transform.view_pos.w = 1.0;
 
 		uniform_transform.view =
                     Matrix4::look_at_dir(

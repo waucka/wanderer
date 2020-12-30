@@ -63,16 +63,16 @@ void main() {
   //vec3 norm = vec3(0.0, 0.0, 1.0);
   //vec4 mat_props = vec4(1.0);
 
-  vec3 v_pos = (global_ubo.view * instance_ubo.model * vec4(fragPos, 1.0)).xyz;
-  vec3 lightPos = vec3(0.0, 0.0, 5.0);
+  vec3 v_pos = (instance_ubo.model * vec4(fragPos, 1.0)).xyz;
+  vec3 light_pos = vec3(0.0, 0.0, 5.0);
   vec3 lightColorBase = vec3(1.0, 1.0, 1.0);
   float ambientStrength = 0.01;
-  vec3 view_light_pos = (global_ubo.view * vec4(lightPos, 1.0)).xyz;
+  //vec3 view_light_pos = (global_ubo.view * vec4(lightPos, 1.0)).xyz;
   float phong_diffuse = 0.318309;
 
-  float A = 20.0 / dot(view_light_pos - v_pos, view_light_pos - v_pos);
-  vec3 L = normalize(view_light_pos - v_pos);
-  vec3 V = normalize(-v_pos);
+  float A = 20.0 / dot(light_pos - v_pos, light_pos - v_pos);
+  vec3 L = normalize(light_pos - v_pos);
+  vec3 V = normalize(global_ubo.view_pos.xyz - v_pos);
   vec3 H = normalize(L + V);
   vec3 nn = normalize(normal);
   vec3 nt = normalize(tangent);

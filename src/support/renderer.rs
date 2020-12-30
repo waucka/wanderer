@@ -216,7 +216,6 @@ impl Presenter {
             self.device.device
                 .device_wait_idle()?;
         }
-	//println!("Replacing swapchain!");
 
 	//self.swapchain.replace(Swapchain::new(
 	// TODO: I hope this doesn't cause any problems with order of creation/destruction.
@@ -232,19 +231,6 @@ impl Presenter {
     pub fn get_swapchain_image_count(&self) -> usize {
 	self.swapchain.frames.len()
     }
-
-    /*pub fn submit_graphics_command_buffer(
-	&self,
-	command_buffer: &CommandBuffer,
-    ) -> anyhow::Result<()> {
-	command_buffer.submit_synced(
-	    self.graphics_queue.clone(),
-	    vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT,
-	    self.image_available_semaphores[self.current_frame],
-	    self.render_finished_semaphores[self.current_frame],
-	    self.inflight_fences[self.current_frame],
-	)
-}*/
 
     pub fn get_sync_objects(&self) -> (vk::Semaphore, vk::Semaphore, vk::Fence) {
 	(
