@@ -267,6 +267,54 @@ fn check_device_extension_support(
     required_extensions.is_empty()
 }
 
+fn try_create_instance(
+    entry: &ash::Entry,
+    app_info: &vk::ApplicationInfo,
+    required_extensions: &[*const i8],
+    debug_utils_create_info: &vk::DebugUtilsMessengerCreateInfoEXT,
+) -> anyhow::Result<ash::Instance> {
+    let required_validation_layer_raw_names: Vec<CString> = VALIDATION
+        .required_validation_layers
+        .iter()
+        .map(|layer_name| CString::new(*layer_name).unwrap())
+        .collect();
+    let enable_layer_names: Vec<*const i8> = required_validation_layer_raw_names
+        .iter()
+        .map(|layer_name| layer_name.as_ptr())
+        .collect();
+
+    let create_info = vk::InstanceCreateInfo {
+        s_type: vk::StructureType::INSTANCE_CREATE_INFO,
+        p_next: if VALIDATION.is_enabled {
+            debug_utils_create_info as *const vk::DebugUtilsMessengerCreateInfoEXT
+                as *const c_void
+        } else {
+            ptr::null()
+        },
+        flags: vk::InstanceCreateFlags::empty(),
+        p_application_info: app_info,
+        pp_enabled_layer_names: if VALIDATION.is_enabled {
+            enable_layer_names.as_ptr()
+        } else {
+            ptr::null()
+        },
+        enabled_layer_count: if VALIDATION.is_enabled {
+            enable_layer_names.len()
+        } else {
+            0
+        } as u32,
+        pp_enabled_extension_names: required_extensions.as_ptr(),
+        enabled_extension_count: required_extensions.len() as u32,
+    };
+
+    let instance = unsafe {
+        entry
+            .create_instance(&create_info, None)?
+    };
+
+    Ok(instance)
+}
+
 fn create_instance(
     entry: &ash::Entry,
     app_name: &str,
@@ -274,7 +322,7 @@ fn create_instance(
     app_version: u32,
     engine_version: u32,
     api_version: u32,
-) -> ash::Instance {
+) -> anyhow::Result<ash::Instance> {
     if VALIDATION.is_enabled && !super::debug::check_validation_layer_support(entry) {
         panic!("Validation layers requested but not available!");
     }
@@ -293,48 +341,28 @@ fn create_instance(
 
     let debug_utils_create_info = super::debug::populate_debug_messenger_create_info();
     let extension_names = super::platforms::required_extension_names();
-
-    let required_validation_layer_raw_names: Vec<CString> = VALIDATION
-        .required_validation_layers
-        .iter()
-        .map(|layer_name| CString::new(*layer_name).unwrap())
-        .collect();
-    let enable_layer_names: Vec<*const i8> = required_validation_layer_raw_names
-        .iter()
-        .map(|layer_name| layer_name.as_ptr())
-        .collect();
-
-    let create_info = vk::InstanceCreateInfo {
-        s_type: vk::StructureType::INSTANCE_CREATE_INFO,
-        p_next: if VALIDATION.is_enabled {
-            &debug_utils_create_info as *const vk::DebugUtilsMessengerCreateInfoEXT
-                as *const c_void
-        } else {
-            ptr::null()
-        },
-        flags: vk::InstanceCreateFlags::empty(),
-        p_application_info: &app_info,
-        pp_enabled_layer_names: if VALIDATION.is_enabled {
-            enable_layer_names.as_ptr()
-        } else {
-            ptr::null()
-        },
-        enabled_layer_count: if VALIDATION.is_enabled {
-            enable_layer_names.len()
-        } else {
-            0
-        } as u32,
-        pp_enabled_extension_names: extension_names.as_ptr(),
-        enabled_extension_count: extension_names.len() as u32,
-    };
-
-    let instance: ash::Instance = unsafe {
-        entry
-            .create_instance(&create_info, None)
-            .expect("Failed to create Vulkan instance")
-    };
-
-    instance
+    let mut try_extension_names = vec![];
+    for ext in extension_names.iter() {
+	try_extension_names.push(*ext);
+    }
+    for ext in super::platforms::optional_extension_names() {
+	try_extension_names.push(ext);
+    }
+    let maybe_instance = try_create_instance(
+	entry,
+	&app_info,
+	&try_extension_names,
+	&debug_utils_create_info,
+    );
+    match maybe_instance {
+	Ok(instance) => Ok(instance),
+	Err(_) => try_create_instance(
+	    entry,
+	    &app_info,
+	    &extension_names,
+	    &debug_utils_create_info,
+	),
+    }
 }
 
 // Device
@@ -576,26 +604,6 @@ impl Device {
 	}
 	queues
     }
-
-    pub fn allocate_descriptor_sets(
-	&self,
-	info: &vk::DescriptorSetAllocateInfo,
-    ) -> anyhow::Result<Vec<vk::DescriptorSet>> {
-	let sets = unsafe {
-            self.inner.device.allocate_descriptor_sets(info)?
-	};
-	Ok(sets)
-    }
-
-    pub fn update_descriptor_sets(
-	&self,
-	descriptor_writes: &[vk::WriteDescriptorSet],
-	descriptor_copies: &[vk::CopyDescriptorSet],
-    ) {
-	unsafe {
-            self.inner.device.update_descriptor_sets(&descriptor_writes, descriptor_copies);
-	}
-    }
 }
 
 struct QueueSet {
@@ -640,7 +648,7 @@ impl InnerDevice {
             *builder.application_version.get_value(),
             ENGINE_VERSION,
             VULKAN_API_VERSION,
-        );
+        )?;
         let (debug_utils_loader, debug_messenger) = debug::setup_debug_utils(&entry, &instance);
         let surface = unsafe {
             super::platforms::create_surface(&entry, &instance, &window)?

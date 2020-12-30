@@ -4,7 +4,7 @@ use ash::vk;
 #[cfg(target_os = "windows")]
 use ash::extensions::khr::Win32Surface;
 #[cfg(all(unix, not(target_os = "android"), not(target_os = "macos")))]
-use ash::extensions::khr::XlibSurface;
+use ash::extensions::khr::{XlibSurface, WaylandSurface};
 #[cfg(target_os = "macos")]
 use ash::extensions::mvk::MacOSSurface;
 
@@ -29,6 +29,10 @@ pub fn required_extension_names() -> Vec<*const i8> {
         DebugUtils::name().as_ptr(),
     ]
 }
+#[cfg(target_os = "macos")]
+pub fn optional_extension_names() -> Vec<*const i8> {
+    vec![]
+}
 
 #[cfg(all(windows))]
 pub fn required_extension_names() -> Vec<*const i8> {
@@ -37,6 +41,10 @@ pub fn required_extension_names() -> Vec<*const i8> {
         Win32Surface::name().as_ptr(),
         DebugUtils::name().as_ptr(),
     ]
+}
+#[cfg(all(windows))]
+pub fn optional_extension_names() -> Vec<*const i8> {
+    vec![]
 }
 
 #[cfg(all(unix, not(target_os = "android"), not(target_os = "macos")))]
@@ -47,15 +55,20 @@ pub fn required_extension_names() -> Vec<*const i8> {
         DebugUtils::name().as_ptr(),
     ]
 }
+#[cfg(all(unix, not(target_os = "android"), not(target_os = "macos")))]
+pub fn optional_extension_names() -> Vec<*const i8> {
+    vec![
+        WaylandSurface::name().as_ptr(),
+    ]
+}
 // ------------------------------------------------------------------------
 
-// create surface ---------------------------------------------------------
 #[cfg(all(unix, not(target_os = "android"), not(target_os = "macos")))]
-pub unsafe fn create_surface<E: EntryV1_0, I: InstanceV1_0>(
+unsafe fn create_x11_surface<E: EntryV1_0, I: InstanceV1_0>(
     entry: &E,
     instance: &I,
     window: &winit::window::Window,
-) -> Result<vk::SurfaceKHR, vk::Result> {
+) -> anyhow::Result<vk::SurfaceKHR> {
     use std::ptr;
     use winit::platform::unix::WindowExtUnix;
 
@@ -69,7 +82,48 @@ pub unsafe fn create_surface<E: EntryV1_0, I: InstanceV1_0>(
         dpy: x11_display as *mut vk::Display,
     };
     let xlib_surface_loader = XlibSurface::new(entry, instance);
-    xlib_surface_loader.create_xlib_surface(&x11_create_info, None)
+    Ok(xlib_surface_loader.create_xlib_surface(&x11_create_info, None)?)
+}
+
+#[cfg(all(unix, not(target_os = "android"), not(target_os = "macos")))]
+unsafe fn create_wayland_surface<E: EntryV1_0, I: InstanceV1_0>(
+    entry: &E,
+    instance: &I,
+    window: &winit::window::Window,
+) -> anyhow::Result<vk::SurfaceKHR> {
+    use std::ptr;
+    use winit::platform::unix::WindowExtUnix;
+
+    let wayland_display = window.wayland_display().unwrap();
+    let wayland_surface = window.wayland_surface().unwrap();
+    let wayland_create_info = vk::WaylandSurfaceCreateInfoKHR {
+        s_type: vk::StructureType::WAYLAND_SURFACE_CREATE_INFO_KHR,
+        p_next: ptr::null(),
+        flags: Default::default(),
+        display: wayland_display as *mut vk::wl_display,
+        surface: wayland_surface as *mut vk::wl_surface,
+    };
+    let wayland_surface_loader = WaylandSurface::new(entry, instance);
+    Ok(wayland_surface_loader.create_wayland_surface(&wayland_create_info, None)?)
+}
+
+// create surface ---------------------------------------------------------
+#[cfg(all(unix, not(target_os = "android"), not(target_os = "macos")))]
+pub unsafe fn create_surface<E: EntryV1_0, I: InstanceV1_0>(
+    entry: &E,
+    instance: &I,
+    window: &winit::window::Window,
+) -> anyhow::Result<vk::SurfaceKHR> {
+    match create_wayland_surface(entry, instance, window) {
+	Ok(surface) => {
+	    println!("Created a Wayland surface");
+	    Ok(surface)
+	},
+	Err(_) => {
+	    println!("Failed to create Wayland surface.  Trying X11...");
+	    create_x11_surface(entry, instance, window)
+	},
+    }
 }
 
 #[cfg(target_os = "macos")]
