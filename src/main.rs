@@ -342,23 +342,33 @@ impl VulkanApp21 {
 }
 
 impl VulkanApp for VulkanApp21 {
+    // TODO: lots of repetition here.  I need to find a solution for that.
     fn draw_frame(&mut self) -> anyhow::Result<()>{
+	if self.is_framebuffer_resized {
+	    self.presenter.fit_to_window()?;
+	    let (width, height) = self.presenter.get_dimensions();
+	    self.is_framebuffer_resized = false;
+	    {
+		let mut pipeline = self.static_geometry_pipelines[0].borrow_mut();
+		pipeline.update_viewport(
+		    width,
+		    height,
+		    &self.presenter,
+		)?;
+	    }
+	    self.scene.rebuild_command_buffers(&self.device, &self.presenter)?;
+	}
 	// Hopefully, this will give me the precision I need for the calculation but the
 	// compactness and speed I want for the result.
+	let mut maybe_new_dimensions = None;
         let since_last_frame = self.presenter.wait_for_next_frame()?;
 	let delta_time = ((since_last_frame.as_nanos() as f64) / 1_000_000_000_f64) as f32;
-	let mut maybe_new_dimensions = None;
         let image_index = self.presenter.acquire_next_image(
 	    &mut |width: usize, height: usize| -> anyhow::Result<()> {
 		maybe_new_dimensions = Some((width, height));
 		Ok(())
 	    },
 	)?;
-
-	if self.is_framebuffer_resized {
-	    maybe_new_dimensions = Some(self.presenter.get_dimensions());
-	    self.is_framebuffer_resized = false;
-	}
 
 	if let Some((width, height)) = maybe_new_dimensions {
 	    {
@@ -370,7 +380,6 @@ impl VulkanApp for VulkanApp21 {
 		)?;
 	    }
 	    self.scene.rebuild_command_buffers(&self.device, &self.presenter)?;
-	    maybe_new_dimensions = None;
 	}
 
         self.update_uniform_buffer(image_index as usize, delta_time);
