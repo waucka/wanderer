@@ -12,6 +12,8 @@ use super::{Device, InnerDevice};
 use super::buffer::{UniformBuffer, HasBuffer};
 use super::texture::{Texture, Sampler};
 
+const DEBUG_DESCRIPTOR_SETS: bool = false;
+
 pub struct WriteDescriptorSet {
     descriptor_type: vk::DescriptorType,
     buffer_info: Pin<Box<Vec<vk::DescriptorBufferInfo>>>,
@@ -384,15 +386,17 @@ impl DescriptorPool {
 		writers.push(item.get_write(*set, binding as u32));
 		writes.push(writers.last().unwrap().get());
 	    }
-	    println!("Performing {} writes to descriptor set {:?}...", writes.len(), set);
-	    for write in writes.iter() {
-		println!(
-		    "\tset: {:?}\n\tbinding: {}\n\ttype: {:?}\n\tcount: {}",
-		    write.dst_set,
-		    write.dst_binding,
-		    write.descriptor_type,
-		    write.descriptor_count,
-		);
+	    if DEBUG_DESCRIPTOR_SETS {
+		println!("Performing {} writes to descriptor set {:?}...", writes.len(), set);
+		for write in writes.iter() {
+		    println!(
+			"\tset: {:?}\n\tbinding: {}\n\ttype: {:?}\n\tcount: {}",
+			write.dst_set,
+			write.dst_binding,
+			write.descriptor_type,
+			write.descriptor_count,
+		    );
+		}
 	    }
 	    unsafe {
 		self.device.device.update_descriptor_sets(&writes, &[]);

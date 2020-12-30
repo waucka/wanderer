@@ -22,6 +22,8 @@ use super::support::shader::Vertex;
 use super::support::texture::Material;
 use super::scene::Renderable;
 
+const DEBUG_DESCRIPTOR_SETS: bool = false;
+
 // TODO: get rid of static geometry type UBO after validating that
 //       this approach works.
 
@@ -178,16 +180,16 @@ impl<V: Vertex> StaticGeometrySet<V> {
 		textures_props.clone(),
 	    )?));
 
-	    println!("Creating type descriptor sets with {} items...", items.len());
+	    if DEBUG_DESCRIPTOR_SETS {
+		println!("Creating type descriptor sets with {} items...", items.len());
+	    }
 	    let sets = type_pool.create_descriptor_sets(
 		1,
 		&type_descriptor_set_layout,
 		&items,
 	    )?;
-	    dbg!(sets.len());
 	    type_descriptor_sets.push(sets[0]);
 	}
-	dbg!(type_descriptor_sets.len());
 
 	let instance_pool = {
 	    let mut pool_sizes: HashMap<vk::DescriptorType, u32> = HashMap::new();
@@ -236,7 +238,9 @@ impl<V: Vertex> StaticGeometrySet<V> {
 		Box::new(UniformBufferRef::new(vec![uniform_buffer_set.get_buffer(frame_idx)?])),
 	    ];
 
-	    println!("Creating instance descriptor sets with {} items...", items.len());
+	    if DEBUG_DESCRIPTOR_SETS {
+		println!("Creating instance descriptor sets with {} items...", items.len());
+	    }
 	    let sets = self.instance_pool.create_descriptor_sets(
 		1,
 		&self.instance_descriptor_set_layout,
@@ -294,18 +298,18 @@ impl<V: Vertex> StaticGeometrySetRenderer<V> {
 impl<V: Vertex> Renderable for StaticGeometrySetRenderer<V> {
     fn write_draw_command(&self, idx: usize, writer: &RenderPassWriter) -> anyhow::Result<()> {
 	writer.bind_pipeline(self.pipeline.clone());
-	println!("Writing draw commands for {} objects...", self.static_geometry_set.objects.len());
 	for object in self.static_geometry_set.objects.iter() {
-	    println!("Writing draw command for an object...");
 	    let descriptor_sets = [
 		self.static_geometry_set.global_descriptor_sets[idx],
 		self.static_geometry_set.type_descriptor_sets[idx],
 		object.instance_descriptor_sets[idx],
 	    ];
-	    println!("Binding descriptor sets...");
-	    println!("\tSet 0: {:?}", descriptor_sets[0]);
-	    println!("\tSet 1: {:?}", descriptor_sets[1]);
-	    println!("\tSet 2: {:?}", descriptor_sets[2]);
+	    if DEBUG_DESCRIPTOR_SETS {
+		println!("Binding descriptor sets...");
+		println!("\tSet 0: {:?}", descriptor_sets[0]);
+		println!("\tSet 1: {:?}", descriptor_sets[1]);
+		println!("\tSet 2: {:?}", descriptor_sets[2]);
+	    }
 	    writer.bind_descriptor_sets(self.pipeline.borrow().get_layout(), &descriptor_sets);
 	    writer.draw_indexed(
 		&self.static_geometry_set.vertex_buffer,

@@ -93,14 +93,12 @@ impl Scene {
 			framebuffer_index,
 		    );
 		    for renderable in self.renderables.iter() {
-			println!("Writing a draw command to command buffer {}...", framebuffer_index);
 			renderable.write_draw_command(framebuffer_index, &render_pass_writer)?;
 		    }
 		}
 	    }
 	    self.command_buffers.push(command_buffer);
 	}
-	println!("{} command buffers present", self.command_buffers.len());
 	Ok(())
     }
 
