@@ -1,2 +1,4 @@
 /target
 *.spv
+/assets
+/renderdoc_captures
