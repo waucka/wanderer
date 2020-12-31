@@ -51,9 +51,13 @@ struct UniformBufferObject {
     #[allow(unused)]
     view_dir: Vector4<f32>,
     #[allow(unused)]
-    use_diffuse: u32,
+    light_positions: [Vector4<f32>; 4],
     #[allow(unused)]
-    use_specular: u32,
+    light_colors: [Vector4<f32>; 4],
+    #[allow(unused)]
+    use_parallax: u32,
+    #[allow(unused)]
+    use_ao: u32,
 }
 
 struct VulkanApp21 {
@@ -173,8 +177,20 @@ impl VulkanApp21 {
                 },
 		view_pos: Vector4::new(0.0, 0.0, 0.0, 1.0),
 		view_dir: Vector4::new(0.0, 1.0, 0.0, 1.0),
-		use_diffuse: 0xffffffff,
-		use_specular: 0xffffffff,
+		light_positions: [
+		    Vector4::new(0.0, 0.0, 2.0, 1.0),
+		    Vector4::new(0.0, 0.0, 0.0, 1.0),
+		    Vector4::new(0.0, 0.0, 0.0, 1.0),
+		    Vector4::new(0.0, 0.0, 0.0, 1.0),
+		],
+		light_colors: [
+		    Vector4::new(5.0, 5.0, 5.0, 5.0),
+		    Vector4::new(0.0, 0.0, 0.0, 0.0),
+		    Vector4::new(0.0, 0.0, 0.0, 0.0),
+		    Vector4::new(0.0, 0.0, 0.0, 0.0),
+		],
+		use_parallax: 0xffffffff,
+		use_ao: 0xffffffff,
 	    },
 	    max_frames_in_flight,
 	)?;
@@ -202,14 +218,22 @@ impl VulkanApp21 {
 	)?;
 	let material2 = Material::from_files(
 	    &device,
-	    &Path::new("./assets/textures/MetalPlates001/MetalPlates001_4K_Color.jpg"),
-	    &Path::new("./assets/textures/MetalPlates001/MetalPlates001_4K_Normal.jpg"),
-	    &Path::new("./assets/textures/MetalPlates001/MetalPlates001_4K_Material.jpg"),
+	    &Path::new("./assets/textures/Bricks034/Bricks034_4K_Color.jpg"),
+	    &Path::new("./assets/textures/Bricks034/Bricks034_4K_Normal.jpg"),
+	    &Path::new("./assets/textures/Bricks034/Bricks034_4K_Properties.png"),
 	)?;
-        let materials = vec![Rc::new(material), Rc::new(material2)];
+	let material3 = Material::from_files(
+	    &device,
+	    &Path::new("./assets/textures/bricks_simple/bricks2.jpg"),
+	    &Path::new("./assets/textures/bricks_simple/bricks2_normal.jpg"),
+	    &Path::new("./assets/textures/bricks_simple/bricks2_disp.jpg"),
+	)?;
+        let materials = vec![Rc::new(material), Rc::new(material2), Rc::new(material3)];
+        // let materials = vec![Rc::new(material)];
 
 	//println!("Loading model...");
         let model = models::Model::load(Path::new(MODEL_PATH))?;
+	//let model = models::Model::load(Path::new("cube.obj"))?;
         let vertex_buffer = VertexBuffer::new(&device, model.get_vertices())?;
         let index_buffer = IndexBuffer::new(&device, model.get_indices())?;
 
@@ -227,10 +251,10 @@ impl VulkanApp21 {
 	    Matrix4::from_scale(1.0),
 	)?;
 
-	viking_room_geometry_set.add(
+	/*viking_room_geometry_set.add(
 	    &device,
 	    Matrix4::from_translation(Vector3::new(0.0, 0.0, 5.0)) * Matrix4::from_scale(0.5),
-	)?;
+	)?;*/
 
 	let set_layouts = [
 	    &global_descriptor_set_layout,
@@ -461,29 +485,27 @@ impl VulkanApp for VulkanApp21 {
         self.camera_speed.z = speed;
     }
 
-    fn toggle_diffuse(&mut self) -> bool {
+    fn toggle_parallax(&mut self) -> bool {
         self.global_uniform_buffer_set.update(
 	    |uniform_transform: &mut UniformBufferObject| -> anyhow::Result<bool> {
-		uniform_transform.use_diffuse = if uniform_transform.use_diffuse > 0 {
+		uniform_transform.use_parallax = if uniform_transform.use_parallax > 0 {
                     0
 		} else {
                     0xffffffff
 		};
-		dbg!(uniform_transform.use_diffuse);
-		Ok(uniform_transform.use_diffuse != 0)
+		Ok(uniform_transform.use_parallax != 0)
             }).unwrap()
     }
 
-    fn toggle_specular(&mut self) -> bool {
+    fn toggle_ao(&mut self) -> bool {
         self.global_uniform_buffer_set.update(
 	    |uniform_transform: &mut UniformBufferObject| -> anyhow::Result<bool> {
-		uniform_transform.use_specular = if uniform_transform.use_specular > 0 {
+		uniform_transform.use_ao = if uniform_transform.use_ao > 0 {
                     0
 		} else {
                     0xffffffff
 		};
-		dbg!(uniform_transform.use_specular);
-		Ok(uniform_transform.use_specular != 0)
+		Ok(uniform_transform.use_ao != 0)
             }).unwrap()
     }
 }

@@ -8,107 +8,145 @@ layout (set = 0, binding = 0, std140) uniform UniformBufferObject {
     mat4 proj;
     vec4 view_pos;
     vec4 view_dir;
-    bool use_diffuse;
-    bool use_specular;
+    vec4 light_positions[4];
+    vec4 light_colors[4];
+    bool use_parallax;
+    bool use_ao;
 } global_ubo;
 layout (set = 1, binding = 1) uniform sampler2D textures_color[256];
 layout (set = 1, binding = 2) uniform sampler2D textures_normal[256];
-// x = displacement, y = roughness, z = metalness, w = ambient occlusion?
+// x = displacement, y = roughness, z = metalness, w = ambient occlusion
 layout (set = 1, binding = 3) uniform sampler2D textures_mat[256];
 layout (set = 2, binding = 0, std140) uniform InstanceSpecificUBO {
   mat4 model;
 } instance_ubo;
 
-layout (location = 0) in vec2 fragTexCoord;
-layout (location = 1) in vec3 normal;
-layout (location = 2) in vec3 tangent;
-layout (location = 3) in vec3 fragPos;
-layout (location = 4) in flat uint texIdx;
+layout (location = 0) in VS_OUT {
+  vec2 fragTexCoord;
+  vec3 fragPos;
+  vec3 tangent_view_pos;
+  vec3 tangent_frag_pos;
+  vec3 tangent_light_positions[4];
+  flat uint texIdx;
+} fs_in;
 
 layout (location = 0) out vec4 outColor;
 
-vec3 fresnel_factor(in vec3 f0, in float product) {
-  return mix(f0, vec3(1.0), pow(1.01 - product, 5.0));
+vec3 schlick_fresnel(in vec3 F0, in float cos_theta) {
+  return F0 + (1.0 - F0) * pow(1.0 - cos_theta, 5.0);
 }
 
-float D_GGX(in float roughness, in float NdH) {
-  float m = roughness * roughness;
-  float m2 = m * m;
-  float d = (NdH * m2 - NdH) * NdH + 1.0;
-  return m2 / (3.1415926 * d * d);
+float distribution_ggx(in float roughness, in float NdH) {
+  float a = roughness * roughness;
+  float a2 = a * a;
+  float NdH2 = NdH * NdH;
+  float num = a2;
+  float denom = NdH2 * (a2 - 1.0) + 1.0;
+  denom = 3.1415926 * denom * denom;
+  return num / denom;
 }
 
-float G_schlick(in float roughness, in float NdV, in float NdL) {
-  float k = roughness * roughness * 0.5;
-  float V = NdV * (1.0 - k) + k;
-  float L = NdL * (1.0 - k) + k;
-  return 0.25 / (V * L);
+float schlick_ggx(in float roughness, in float NdV) {
+  float r = (roughness + 1.0);
+  float k = (r * r) / 8.0;
+
+  float num = NdV;
+  float denom = NdV * (1.0 - k) + k;
+  return num / denom;
 }
 
-vec3 cooktorrance_specular(in float NdL, in float NdV, in float NdH, in vec3 specular, in float roughness) {
-  float D = D_GGX(roughness, NdH);
-  float G = G_schlick(roughness, NdV, NdL);
-  //float rim = mix(1.0 - roughness * rim_factor * 0.9, 1.0, NdV);
-  return specular * G * D;
+float smith_geometry(in float NdL, in float NdV, in float roughness) {
+  float ggx1 = schlick_ggx(roughness, NdV);
+  float ggx2 = schlick_ggx(roughness, NdL);
+  return ggx1 * ggx2;
+}
+
+vec3 cooktorrance_specular(in float NdL, in float NdV, in float NDF, in float G, in vec3 F) {
+  vec3 num = NDF * G * F;
+  float denom = 4.0 * NdV * NdL;
+  return num / max(denom, 0.001);
+}
+
+vec2 parallax_mapping(in vec3 view_dir) {
+  vec2 tex_coords = fs_in.fragTexCoord;
+  float displacement = texture(textures_mat[nonuniformEXT(fs_in.texIdx)], tex_coords).r;
+  float height_scale = 0.1;
+  vec2 p = view_dir.xy / view_dir.z * (displacement * height_scale);
+  return tex_coords - p;
+}
+
+vec2 parallax_mapping_steep(in vec3 view_dir) {
+  const float height_scale = 0.01;
+  const float minLayers = 8;
+  const float maxLayers = 32;
+  float num_layers = mix(maxLayers, minLayers, abs(dot(vec3(0.0, 0.0, 1.0), view_dir)));
+  float layer_depth = 1.0 / num_layers;
+  float current_layer_depth = 0.0;
+  vec2 P = view_dir.xy * height_scale;
+  vec2 delta_tex_coords = P / num_layers;
+
+  vec2 current_tex_coords = fs_in.fragTexCoord;
+  float current_depth_value = 1.0 - texture(textures_mat[nonuniformEXT(fs_in.texIdx)], current_tex_coords).r;
+
+  while(current_layer_depth < current_depth_value) {
+    current_tex_coords -= delta_tex_coords;
+    current_depth_value = 1.0 - texture(textures_mat[nonuniformEXT(fs_in.texIdx)], current_tex_coords).r;
+    current_layer_depth += layer_depth;
+  }
+
+  return current_tex_coords;
 }
 
 void main() {
-  vec3 base = texture(textures_color[nonuniformEXT(texIdx)], fragTexCoord).xyz;
-  vec3 norm = texture(textures_normal[nonuniformEXT(texIdx)], fragTexCoord).xyz;
-  vec4 mat_props = texture(textures_mat[nonuniformEXT(texIdx)], fragTexCoord);
-  //vec3 base = texture(textures_color[0], fragTexCoord).xyz;
-  //vec3 norm = texture(textures_normal[0], fragTexCoord).xyz;
-  //vec4 mat_props = texture(textures_mat[0], fragTexCoord);
-  //vec3 base = vec3(1.0);
-  //vec3 norm = vec3(0.0, 0.0, 1.0);
-  //vec4 mat_props = vec4(1.0);
-
-  vec3 v_pos = (instance_ubo.model * vec4(fragPos, 1.0)).xyz;
-  vec3 light_pos = vec3(0.0, 0.0, 5.0);
-  vec3 lightColorBase = vec3(1.0, 1.0, 1.0);
-  float ambientStrength = 0.01;
-  //vec3 view_light_pos = (global_ubo.view * vec4(lightPos, 1.0)).xyz;
-  float phong_diffuse = 0.318309;
-
-  float A = 20.0 / dot(light_pos - v_pos, light_pos - v_pos);
-  vec3 L = normalize(light_pos - v_pos);
-  vec3 V = normalize(global_ubo.view_pos.xyz - v_pos);
-  vec3 H = normalize(L + V);
-  vec3 nn = normalize(normal);
-  vec3 nt = normalize(tangent);
-  mat3x3 tbn = mat3x3(nt, cross(nn, nt), nn);
-  vec3 N = tbn * (norm * 2.0 - 1.0);
-
-  float roughness = mat_props.y;
-  float metallic = mat_props.z;
-
-  // 0.04 was found online; is that really a good specular value for
-  // a non-metallic object?
-  vec3 specular = mix(vec3(0.04), base, metallic);
-
-  float NdL = max(0.0, dot(N, L));
-  float NdV = max(0.001, dot(N, V));
-  float NdH = max(0.001, dot(N, H));
-  float HdV = max(0.001, dot(H, V));
-  float LdV = max(0.001, dot(L, V));
-
-  vec3 specfresnel = fresnel_factor(specular, HdV);
-  vec3 specref = cooktorrance_specular(NdL, NdV, NdH, specfresnel, roughness);
-
-  specref *= vec3(NdL);
-  vec3 diffref = (vec3(1.0) - specfresnel) * phong_diffuse * NdL;
-
-  vec3 reflected_light = vec3(0);
-  vec3 diffuse_light = vec3(0);
-  vec3 light_color = lightColorBase * A;
-  reflected_light += specref * light_color;
-  diffuse_light += diffref * light_color;
-  vec3 lighting = vec3(ambientStrength);
-  if (global_ubo.use_specular) {
-    lighting += reflected_light;
+  vec3 frag_pos = fs_in.tangent_frag_pos;
+  vec3 view_pos = fs_in.tangent_view_pos;
+  vec3 V = normalize(view_pos - frag_pos);
+  vec2 tex_coords = fs_in.fragTexCoord;
+  if (global_ubo.use_parallax) {
+    tex_coords = parallax_mapping_steep(V);
+    if(tex_coords.x > 1.0 || tex_coords.y > 1.0 || tex_coords.x < 0.0 || tex_coords.y < 0.0) {
+      discard;
+    }
   }
-  if (global_ubo.use_diffuse) {
-    lighting += diffuse_light;
+
+  vec3 albedo = texture(textures_color[nonuniformEXT(fs_in.texIdx)], tex_coords).xyz;
+  vec3 N = texture(textures_normal[nonuniformEXT(fs_in.texIdx)], tex_coords).xyz;
+  N = normalize(N * 2.0 - 1.0);
+  vec4 mat_props = texture(textures_mat[nonuniformEXT(fs_in.texIdx)], tex_coords);
+  float roughness = mat_props.g;
+  float metallic = mat_props.b;
+  float ao = 1.0;
+  if (global_ubo.use_ao) {
+    ao = mat_props.a;
   }
-  outColor = vec4(lighting, 1.0);
+
+  vec3 Lo = vec3(0.0);
+  for(int i  = 0; i < 4; i++) {
+    vec3 light_pos = fs_in.tangent_light_positions[i];
+    vec3 L = normalize(light_pos - frag_pos);
+    vec3 H = normalize(V + L);
+    float NdV = max(dot(N, V), 0.0);
+    float NdL = max(dot(N, L), 0.0);
+    float NdH = max(dot(N, H), 0.0);
+
+    float distance = length(light_pos - frag_pos);
+    float attenuation = 1.0 / (distance * distance);
+    vec3 radiance = global_ubo.light_colors[i].xyz * attenuation;
+
+    vec3 F0 = vec3(0.04);
+    F0 = mix(F0, albedo, metallic);
+    vec3 F = schlick_fresnel(F0, max(dot(H, V), 0.0));
+    float NDF = distribution_ggx(roughness, NdH);
+    float G = smith_geometry(NdL, NdV, roughness);
+    vec3 specular = cooktorrance_specular(NdL, NdV, NDF, G, F);
+
+    vec3 kS = F;
+    vec3 kD = vec3(1.0) - kS;
+    kD *= 1.0 - metallic;
+    Lo += (kD * albedo / 3.1415926 + specular) * radiance * NdL;
+  }
+
+  vec3 ambient = vec3(0.03) * albedo * ao;
+  vec3 color = clamp(ambient + Lo, vec3(0.0), vec3(1.0));
+  outColor = vec4(color, 1.0);
 }

@@ -29,8 +29,8 @@ pub trait VulkanApp {
     fn set_x_speed(&mut self, speed: f32);
     fn set_y_speed(&mut self, speed: f32);
     fn set_z_speed(&mut self, speed: f32);
-    fn toggle_diffuse(&mut self) -> bool;
-    fn toggle_specular(&mut self) -> bool;
+    fn toggle_parallax(&mut self) -> bool;
+    fn toggle_ao(&mut self) -> bool;
 }
 
 pub fn main_loop<A: 'static + VulkanApp>(event_loop: EventLoop<()>, mut vulkan_app: A) {
@@ -106,17 +106,17 @@ pub fn main_loop<A: 'static + VulkanApp>(event_loop: EventLoop<()>, mut vulkan_a
                                         shift_down = false;
                                     },
                                     (Some(VirtualKeyCode::T), ElementState::Released) => {
-                                        if vulkan_app.toggle_diffuse() {
-                                            println!("Toggled diffuse lighting on");
+                                        if vulkan_app.toggle_parallax() {
+                                            println!("Toggled parallax mapping on");
                                         } else {
-                                            println!("Toggled diffuse lighting off");
+                                            println!("Toggled parallax mapping off");
                                         };
                                     }
                                     (Some(VirtualKeyCode::Y), ElementState::Released) => {
-                                        if vulkan_app.toggle_specular() {
-                                            println!("Toggled specular lighting on");
+                                        if vulkan_app.toggle_ao() {
+                                            println!("Toggled ambient occlusion on");
                                         } else {
-                                            println!("Toggled specular lighting off");
+                                            println!("Toggled ambient occlusion off");
                                         };
                                     }
                                     _ => {},
