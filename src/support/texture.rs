@@ -1,7 +1,7 @@
 use ash::version::DeviceV1_0;
 use ash::vk;
 use anyhow::anyhow;
-use image::GenericImageView;
+use image::{GenericImageView, DynamicImage};
 
 use std::rc::Rc;
 use std::ptr;
@@ -21,21 +21,27 @@ pub struct Texture {
 
 impl Texture {
     pub fn from_file(device: &Device, image_path: &Path) -> anyhow::Result<Self> {
-	let mut image_object = match image::open(image_path) {
+	let start = std::time::Instant::now();
+	let image_object = match image::open(image_path) {
 	    Ok(v) => v,
 	    Err(e) => return Err(anyhow!("{}: {}", image_path.display(), e)),
 	};
+	println!("Loaded {} in {}ms", image_path.display(), start.elapsed().as_millis());
+	Self::from_image(device, image_object)
+    }
+
+    pub fn from_image(device: &Device, mut image_object: DynamicImage) -> anyhow::Result<Self> {
 	image_object = image_object.flipv();
 	let (image_width, image_height) = (image_object.width(), image_object.height());
 	let image_size =
             (std::mem::size_of::<u8>() as u32 * image_width * image_height * 4) as vk::DeviceSize;
 	let image_data = match &image_object {
-            image::DynamicImage::ImageLuma8(_) |
-            image::DynamicImage::ImageBgr8(_) |
-            image::DynamicImage::ImageRgb8(_) |
-            image::DynamicImage::ImageLumaA8(_) |
-            image::DynamicImage::ImageBgra8(_) |
-            image::DynamicImage::ImageRgba8(_) => image_object.to_rgba8().into_raw(),
+            DynamicImage::ImageLuma8(_) |
+            DynamicImage::ImageBgr8(_) |
+            DynamicImage::ImageRgb8(_) |
+            DynamicImage::ImageLumaA8(_) |
+            DynamicImage::ImageBgra8(_) |
+            DynamicImage::ImageRgba8(_) => image_object.to_rgba8().into_raw(),
             _ => panic!("Unsupported image type (probably 16 bits per channel)"),
 	};
 	let mip_levels = ((max(image_width, image_height) as f32)
@@ -86,7 +92,9 @@ impl Texture {
 	    mip_levels,
         };
 
+	let start = std::time::Instant::now();
 	tex.generate_mipmaps()?;
+	println!("Generated mipmaps in {}ms", start.elapsed().as_millis());
 
         Ok(tex)
     }
@@ -254,6 +262,7 @@ impl Sampler {
             address_mode_w: address_mode,
             mip_lod_bias: 0.0,
             anisotropy_enable: vk::TRUE,
+	    // TODO: make this configurable
             max_anisotropy: 16.0,
             compare_enable: vk::FALSE,
             compare_op: vk::CompareOp::ALWAYS,
@@ -308,7 +317,7 @@ impl CombinedTexture {
 pub struct Material {
     color: Rc<Texture>,
     normal: Rc<Texture>,
-    // r = displacement, g = roughness, b = metalness
+    // r = displacement, g = roughness, b = metalness, a = ambient occlusion
     material: Rc<Texture>,
     sampler: Rc<Sampler>,
 }
