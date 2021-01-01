@@ -37,7 +37,7 @@ pub struct StaticGeometrySet<V: Vertex> {
     type_descriptor_sets: Vec<vk::DescriptorSet>,
     instance_descriptor_set_layout: DescriptorSetLayout,
     vertex_buffer: Rc<VertexBuffer<V>>,
-    index_buffer: Rc<IndexBuffer>,
+    index_buffer: Option<Rc<IndexBuffer>>,
     uniform_buffer_set: UniformBufferSet<StaticGeometryTypeUBO>,
     type_pool: DescriptorPool,
     instance_pool: DescriptorPool,
@@ -56,7 +56,7 @@ impl<V: Vertex> StaticGeometrySet<V> {
 	device: &Device,
 	global_descriptor_sets: Vec<vk::DescriptorSet>,
 	vertex_buffer: Rc<VertexBuffer<V>>,
-	index_buffer: Rc<IndexBuffer>,
+	index_buffer: Option<Rc<IndexBuffer>>,
 	materials: &Vec<Rc<Material>>,
 	num_frames: usize,
     ) -> anyhow::Result<Self> {
@@ -311,10 +311,15 @@ impl<V: Vertex> Renderable for StaticGeometrySetRenderer<V> {
 		println!("\tSet 2: {:?}", descriptor_sets[2]);
 	    }
 	    writer.bind_descriptor_sets(self.pipeline.borrow().get_layout(), &descriptor_sets);
-	    writer.draw_indexed(
-		&self.static_geometry_set.vertex_buffer,
-		&self.static_geometry_set.index_buffer,
-	    );
+	    match &self.static_geometry_set.index_buffer {
+		Some(idx_buf) => writer.draw_indexed(
+		    &self.static_geometry_set.vertex_buffer,
+		    idx_buf,
+		),
+		None => writer.draw(
+		    &self.static_geometry_set.vertex_buffer,
+		),
+	    };
 	}
 	Ok(())
     }

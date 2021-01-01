@@ -360,6 +360,28 @@ impl<'a> RenderPassWriter<'a> {
 	}
     }
 
+    pub fn draw<T>(
+	&self,
+	vertex_buffer: &VertexBuffer<T>,
+    ) {
+	let vertex_buffers = [vertex_buffer.get_buffer()];
+	let offsets = [0_u64];
+
+	unsafe {
+	    self.device.device.cmd_bind_vertex_buffers(
+		self.command_buffer.buf,
+		0,
+		&vertex_buffers,
+		&offsets,
+	    );
+	    self.device.device.cmd_draw(
+		self.command_buffer.buf,
+		vertex_buffer.len() as u32,
+		1, 0, 0,
+	    );
+	}
+    }
+
     pub fn draw_indexed<T>(
 	&self,
 	vertex_buffer: &VertexBuffer<T>,

@@ -5,6 +5,111 @@ use cgmath::{Vector4, Vector3, InnerSpace};
 
 use std::path::Path;
 
+pub struct ModelNonIndexed {
+    vertices: Vec<Vertex>,
+}
+
+impl ModelNonIndexed {
+    pub fn load(obj_path: &Path) -> anyhow::Result<Self> {
+        let model_obj = match tobj::load_obj(obj_path, true) {
+	    Ok(obj) => obj,
+	    Err(e) => return Err(anyhow!("Failed to open {}: {}", obj_path.display(), e)),
+	};
+
+	let mut all_vertices = vec![];
+
+        let (models, _) = model_obj;
+        for m in models.iter() {
+            let mesh = &m.mesh;
+
+            if mesh.texcoords.len() == 0 {
+                return Err(anyhow!("Missing texture coordinates for the model"));
+            }
+	    if mesh.indices.len() % 3 != 0 {
+		return Err(anyhow!("Index count is not a multiple of 3; these are not triangles!"))
+	    }
+
+            let mut vertices = vec![];
+            let total_vertices_count = mesh.positions.len() / 3;
+            for i in 0..total_vertices_count {
+                let vertex = Vertex{
+                    pos: [
+                        mesh.positions[i * 3],
+                        mesh.positions[i * 3 + 1],
+                        mesh.positions[i * 3 + 2],
+                        1.0,
+                    ],
+                    normal: [
+                        mesh.normals[i * 3],
+                        mesh.normals[i * 3 + 1],
+                        mesh.normals[i * 3 + 2],
+                        1.0,
+                    ],
+                    tangent: [
+                        0.0,
+                        0.0,
+                        0.0,
+                        1.0,
+                    ],
+                    tex_coord: [
+                        mesh.texcoords[i * 2],
+                        mesh.texcoords[i * 2 +1],
+                    ],
+		    tex_idx: 1,//(mesh.positions[i * 3] * 10.0) as u32 % 2,
+                };
+                vertices.push(vertex);
+            }
+            let indices = mesh.indices.clone();
+	    let mut real_vertices = Vec::with_capacity(indices.len());
+	    let total_faces_count = indices.len() / 3;
+	    for idx in 0..total_faces_count {
+		let i0 = indices[idx * 3] as usize;
+		let i1 = indices[idx * 3 + 1] as usize;
+		let i2 = indices[idx * 3 + 2] as usize;
+		real_vertices.push(vertices[i0]);
+		real_vertices.push(vertices[i1]);
+		real_vertices.push(vertices[i2]);
+	    }
+
+	    let total_faces_count = real_vertices.len() / 3;
+	    for idx in 0..total_faces_count {
+		let v0 = real_vertices[idx * 3];
+		let v1 = real_vertices[idx * 3 + 1];
+		let v2 = real_vertices[idx * 3 + 2];
+		let n = Vector4::from(v0.normal).truncate();
+
+		let e1 = Vector4::from(v1.pos).truncate() - Vector4::from(v0.pos).truncate();
+		let e2 = Vector4::from(v2.pos).truncate() - Vector4::from(v0.pos).truncate();
+		let x1 = v1.tex_coord[0] - v0.tex_coord[0];
+		let y1 = v1.tex_coord[1] - v0.tex_coord[1];
+		let x2 = v2.tex_coord[0] - v0.tex_coord[0];
+		let y2 = v2.tex_coord[1] - v0.tex_coord[1];
+		let r = 1.0 / (x1 * y2 - x2 * y1);
+		let t = (e1 * y2 - e2 * y1) * r;
+		let b = (e2 * x1 - e1 * x2) * r;
+
+		let dot_product = t.cross(b).dot(n);
+		let ext = if dot_product > 0.0 {
+		    1.0
+		} else {
+		    -1.0
+		};
+		real_vertices[idx * 3].tangent = t.extend(ext).into();
+		real_vertices[idx * 3 + 1].tangent = t.extend(ext).into();
+		real_vertices[idx * 3 + 2].tangent = t.extend(ext).into();
+	    }
+	    all_vertices.extend(real_vertices);
+        }
+
+        Ok(Self {
+            vertices: all_vertices,
+        })
+    }
+
+    pub fn get_vertices(&self) -> &[Vertex] {
+        &self.vertices
+    }
+}
 pub struct Model {
     vertices: Vec<Vertex>,
     indices: Vec<u32>
@@ -53,7 +158,7 @@ impl Model {
                         mesh.texcoords[i * 2],
                         mesh.texcoords[i * 2 +1],
                     ],
-		    tex_idx: 0,//(mesh.positions[i * 3] * 10.0) as u32 % 2,
+		    tex_idx: 1,//(mesh.positions[i * 3] * 10.0) as u32 % 2,
                 };
                 vertices.push(vertex);
             }

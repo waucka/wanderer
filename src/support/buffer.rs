@@ -202,6 +202,7 @@ impl HasBuffer for UploadSourceBuffer {
 
 pub struct VertexBuffer<T> {
     buf: Buffer,
+    len: usize,
     _phantom: std::marker::PhantomData<T>,
 }
 
@@ -230,8 +231,13 @@ impl<T> VertexBuffer<T> {
 
 	Ok(Self{
 	    buf: vertex_buffer,
+	    len: data.len(),
 	    _phantom: std::marker::PhantomData,
 	})
+    }
+
+    pub fn len(&self) -> usize {
+	self.len
     }
 }
 

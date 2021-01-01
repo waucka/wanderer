@@ -18,7 +18,7 @@ mod objects;
 mod models;
 
 use window::VulkanApp;
-use models::{Model, Vertex};
+use models::{Model, ModelNonIndexed, Vertex};
 use support::{Device, DeviceBuilder};
 use support::descriptor::{
     DescriptorPool,
@@ -75,7 +75,7 @@ struct VulkanApp21 {
     global_descriptor_sets: Vec<vk::DescriptorSet>,
     scene: Scene,
     materials: Vec<Rc<Material>>,
-    _model: Model,
+    _model: ModelNonIndexed,
 
     is_framebuffer_resized: bool,
     yaw_speed: f32,
@@ -228,27 +228,36 @@ impl VulkanApp21 {
 	    &Path::new("./assets/textures/bricks_simple/bricks2_normal.jpg"),
 	    &Path::new("./assets/textures/bricks_simple/bricks2_disp.jpg"),
 	)?;
-        let materials = vec![Rc::new(material), Rc::new(material2), Rc::new(material3)];
+	let material4 = Material::from_files(
+	    &device,
+	    &Path::new("./assets/textures/WoodenTable_01/WoodenTable_01_8-bit_Diffuse.png"),
+	    &Path::new("./assets/textures/WoodenTable_01/WoodenTable_01_8-bit_Normal.png"),
+	    &Path::new("./assets/textures/WoodenTable_01/WoodenTable_01_8-bit_Properties.png"),
+	)?;
+        let materials = vec![Rc::new(material), Rc::new(material2), Rc::new(material3), Rc::new(material4)];
         // let materials = vec![Rc::new(material)];
 
 	//println!("Loading model...");
-        let model = models::Model::load(Path::new(MODEL_PATH))?;
-	//let model = models::Model::load(Path::new("cube.obj"))?;
+        //let model = models::Model::load(Path::new(MODEL_PATH))?;
+	//let model = models::ModelNonIndexed::load(Path::new(MODEL_PATH))?;
+	let model = models::ModelNonIndexed::load(Path::new("./assets/models/WoodenTable_01.obj"))?;
+	//let model = models::ModelNonIndexed::load(Path::new("cube.obj"))?;
         let vertex_buffer = VertexBuffer::new(&device, model.get_vertices())?;
-        let index_buffer = IndexBuffer::new(&device, model.get_indices())?;
+        //let index_buffer = IndexBuffer::new(&device, model.get_indices())?;
 
 
 	let mut viking_room_geometry_set = StaticGeometrySet::new(
 	    &device,
 	    global_descriptor_sets.clone(),
 	    Rc::new(vertex_buffer),
-	    Rc::new(index_buffer),
+	    None,
+	    //Some(Rc::new(index_buffer)),
 	    &materials,
 	    max_frames_in_flight,
 	)?;
 	viking_room_geometry_set.add(
 	    &device,
-	    Matrix4::from_scale(1.0),
+	    Matrix4::from_axis_angle(Vector3::new(1.0, 0.0, 0.0), Deg(90.0)) * Matrix4::from_scale(1.0),
 	)?;
 
 	/*viking_room_geometry_set.add(
