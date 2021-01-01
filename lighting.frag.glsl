@@ -67,31 +67,90 @@ vec3 cooktorrance_specular(in float NdL, in float NdV, in float NDF, in float G,
   return num / max(denom, 0.001);
 }
 
+float get_height(in vec2 tex_coords) {
+  return 1.0 - texture(textures_mat[nonuniformEXT(fs_in.texIdx)], tex_coords).r;
+}
+
 vec2 parallax_mapping(in vec3 view_dir) {
   vec2 tex_coords = fs_in.fragTexCoord;
-  float displacement = texture(textures_mat[nonuniformEXT(fs_in.texIdx)], tex_coords).r;
+  float displacement = get_height(tex_coords);
   float height_scale = 0.1;
   vec2 p = view_dir.xy / view_dir.z * (displacement * height_scale);
   return tex_coords - p;
 }
 
-vec2 parallax_mapping_steep(in vec3 view_dir) {
+void parallax_mapping_steep(in vec3 view_dir, out vec2 prev_tex_coords, out float prev_height_value, out vec2 current_tex_coords, out float current_height_value, out float layer_height, out float current_layer_height, out vec2 dtex) {
   const float height_scale = 0.01;
-  const float minLayers = 8;
-  const float maxLayers = 32;
-  float num_layers = mix(maxLayers, minLayers, abs(dot(vec3(0.0, 0.0, 1.0), view_dir)));
-  float layer_depth = 1.0 / num_layers;
-  float current_layer_depth = 0.0;
-  vec2 P = view_dir.xy * height_scale;
-  vec2 delta_tex_coords = P / num_layers;
+  const float min_layers = 8;
+  const float max_layers = 32;
+  float num_layers = mix(max_layers, min_layers, abs(dot(vec3(0.0, 0.0, 1.0), view_dir)));
+  layer_height = 1.0 / num_layers;
+  current_layer_height = 0.0;
+  dtex = height_scale * view_dir.xy / view_dir.z / num_layers;
 
-  vec2 current_tex_coords = fs_in.fragTexCoord;
-  float current_depth_value = 1.0 - texture(textures_mat[nonuniformEXT(fs_in.texIdx)], current_tex_coords).r;
+  current_tex_coords = fs_in.fragTexCoord;
+  prev_tex_coords = fs_in.fragTexCoord;
+  current_height_value = get_height(current_tex_coords);
+  prev_height_value = current_height_value;
 
-  while(current_layer_depth < current_depth_value) {
-    current_tex_coords -= delta_tex_coords;
-    current_depth_value = 1.0 - texture(textures_mat[nonuniformEXT(fs_in.texIdx)], current_tex_coords).r;
-    current_layer_depth += layer_depth;
+  while(current_height_value > current_layer_height) {
+    prev_tex_coords = current_tex_coords;
+    prev_height_value = current_height_value;
+
+    current_layer_height += layer_height;
+    current_tex_coords -= dtex;
+    current_height_value = get_height(current_tex_coords);
+  }
+}
+
+vec2 parallax_mapping_occlusion(in vec3 view_dir) {
+  vec2 prev_tex_coords = vec2(0.0);
+  float prev_height_value = 0.0;
+  vec2 current_tex_coords = vec2(0.0);
+  float current_height_value = 0.0;
+  float layer_height = 0.0;
+  float current_layer_height = 0.0;
+  vec2 dtex = vec2(0.0);
+  parallax_mapping_steep(view_dir, prev_tex_coords, prev_height_value, current_tex_coords, current_height_value, layer_height, current_layer_height, dtex);
+
+  float next_height = current_height_value - current_layer_height;
+  float prev_height = prev_height_value - current_layer_height + layer_height;
+
+  float weight = next_height / (next_height - prev_height);
+  vec2 final_tex_coords = prev_tex_coords * weight + current_tex_coords * (1.0 - weight);
+  return final_tex_coords;
+}
+
+vec2 parallax_mapping_relief(in vec3 view_dir) {
+  vec2 prev_tex_coords = vec2(0.0);
+  float prev_height_value = 0.0;
+  vec2 current_tex_coords = vec2(0.0);
+  float current_height_value = 0.0;
+  float layer_height = 0.0;
+  float current_layer_height = 0.0;
+  vec2 dtex = vec2(0.0);
+  parallax_mapping_steep(view_dir, prev_tex_coords, prev_height_value, current_tex_coords, current_height_value, layer_height, current_layer_height, dtex);
+
+  vec2 delta_tex_coords = dtex / 2;
+  float delta_height = layer_height / 2;
+
+  current_tex_coords += delta_tex_coords;
+  current_layer_height -= delta_height;
+
+  const int num_search_steps = 5;
+  for(int i = 0; i < num_search_steps; i++) {
+    delta_tex_coords /= 2;
+    delta_height /= 2;
+
+    current_height_value = get_height(current_tex_coords);
+
+    if(current_height_value > current_layer_height) {
+      current_tex_coords -= delta_tex_coords;
+      current_layer_height += delta_height;
+    } else {
+      current_tex_coords += delta_tex_coords;
+      current_layer_height -= delta_height;
+    }
   }
 
   return current_tex_coords;
@@ -103,7 +162,7 @@ void main() {
   vec3 V = normalize(view_pos - frag_pos);
   vec2 tex_coords = fs_in.fragTexCoord;
   if (global_ubo.use_parallax) {
-    tex_coords = parallax_mapping_steep(V);
+    tex_coords = parallax_mapping_relief(V);
     if(tex_coords.x > 1.0 || tex_coords.y > 1.0 || tex_coords.x < 0.0 || tex_coords.y < 0.0) {
       discard;
     }
