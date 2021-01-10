@@ -29,3 +29,15 @@ https://cescg.org/wp-content/uploads/2018/04/Michelic-Real-Time-Rendering-of-Pro
 http://extremelearning.com.au/how-to-evenly-distribute-points-on-a-sphere-more-effectively-than-the-canonical-fibonacci-lattice/
 # Parallax mapping
 http://web.archive.org/web/20190128023901/http://sunandblackcat.com/tipFullView.php?topicid=28
+# Component crates of the Bevy game engine (bevy_ecs might be useful)
+https://github.com/bevyengine/bevy/tree/master/crates
+# Library for flexbox sizing
+https://github.com/vislyhq/stretch
+# GUI library that apparently offers DIY integration with your choice of graphics library
+https://github.com/emilk/egui
+https://zeux.io/2020/02/27/writing-an-efficient-vulkan-renderer/
+https://forum.beyond3d.com/threads/modern-textureless-deferred-rendering-techniques.57611/
+http://www.adriancourreges.com/blog/2016/09/09/doom-2016-graphics-study/
+https://simoncoenen.com/blog/programming/graphics/DoomEternalStudy.html
+# Game development with explanatory videos
+https://hero.handmade.network/episode/code
