@@ -26,7 +26,7 @@ use support::descriptor::{
     DescriptorRef,
     UniformBufferRef,
 };
-use support::renderer::{Presenter, Pipeline};
+use support::renderer::{Presenter, Pipeline, RenderPassBuilder, AttachmentDescription, Subpass};
 use support::shader::{VertexShader, FragmentShader};
 use support::texture::Material;
 use support::buffer::{VertexBuffer, IndexBuffer, UniformBufferSet};
@@ -107,8 +107,34 @@ impl VulkanApp21 {
 		.with_default_extensions()
         )?;
         let msaa_samples = device.get_max_usable_sample_count();
+	let (surface_format, depth_format) = Presenter::get_swapchain_image_formats(&device);
+	// TODO: I don't like the fact that the programmer has to keep track of these damn indices.
+	let render_pass_builder = RenderPassBuilder::new()
+	    .with_attachment(AttachmentDescription::standard_color_intermediate(surface_format, true))
+	    .with_attachment(AttachmentDescription::standard_depth(depth_format, true))
+	    .with_attachment(AttachmentDescription::standard_color_final(surface_format, false))
+	    .with_subpass({
+		let mut subpass = Subpass::new(vk::PipelineBindPoint::GRAPHICS);
+		subpass.add_color_attachment(
+		    vk::AttachmentReference{
+			attachment: 0_u32,
+			layout: vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL,
+		    },
+		    Some(vk::AttachmentReference{
+			attachment: 2_u32,
+			layout: vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL,
+		    }),
+		);
+		subpass.set_depth_attachment(vk::AttachmentReference{
+		    attachment: 1_u32,
+		    layout: vk::ImageLayout::DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
+		});
+		subpass
+	    })
+	    .with_standard_entry_dep();
         let presenter = Presenter::new(
             &device,
+	    render_pass_builder,
 	    msaa_samples,
             60,
         )?;
