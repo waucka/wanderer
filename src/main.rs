@@ -1,6 +1,8 @@
 use winit::event_loop::EventLoop;
 use ash::vk;
 use cgmath::{Deg, Matrix4, Point3, Vector3, Vector4, InnerSpace};
+use glsl_layout::{AsStd140};
+use anyhow::anyhow;
 
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -20,18 +22,32 @@ mod models;
 use window::VulkanApp;
 use models::{Model, ModelNonIndexed, Vertex};
 use support::{Device, DeviceBuilder};
+use support::command_buffer::CommandBuffer;
 use support::descriptor::{
     DescriptorPool,
     DescriptorSetLayout,
     DescriptorRef,
+    InputAttachmentRef,
     UniformBufferRef,
 };
-use support::renderer::{Presenter, Pipeline, RenderPassBuilder, AttachmentDescription, Subpass};
+use support::renderer::{
+    Presenter,
+    Pipeline,
+    PipelineParameters,
+    RenderPass,
+    RenderPassBuilder,
+    AttachmentDescription,
+    AttachmentSet,
+    AttachmentRef,
+    Subpass,
+};
 use support::shader::{VertexShader, FragmentShader};
-use support::texture::Material;
+use support::texture::{Material, Texture};
 use support::buffer::{VertexBuffer, IndexBuffer, UniformBufferSet};
-use objects::{StaticGeometrySet, StaticGeometrySetRenderer};
+use support::image::ImageBuilder;
+use objects::{StaticGeometrySet, StaticGeometrySetRenderer, PostProcessingStep};
 use scene::{Scene, Renderable};
+use utils::{NullVertex, Matrix4f, Vector4f};
 
 const WINDOW_TITLE: &'static str = "Wanderer";
 const WINDOW_WIDTH: usize = 1024;
@@ -39,30 +55,40 @@ const WINDOW_HEIGHT: usize = 768;
 const MODEL_PATH: &'static str = "viking_room.obj";
 //const TEXTURE_PATH: &'static str = "viking_room.png";
 
-#[repr(C)]
-#[derive(Clone)]
+#[derive(Debug, Default, Clone, Copy, AsStd140)]
 struct UniformBufferObject {
     #[allow(unused)]
-    view: Matrix4<f32>,
+    view: Matrix4f,
     #[allow(unused)]
-    proj: Matrix4<f32>,
+    proj: Matrix4f,
     #[allow(unused)]
-    view_pos: Vector4<f32>,
+    view_pos: Vector4f,
     #[allow(unused)]
-    view_dir: Vector4<f32>,
+    view_dir: Vector4f,
     #[allow(unused)]
-    light_positions: [Vector4<f32>; 4],
+    light_positions: [Vector4f; 4],
     #[allow(unused)]
-    light_colors: [Vector4<f32>; 4],
+    light_colors: [Vector4f; 4],
     #[allow(unused)]
-    use_parallax: u32,
+    use_parallax: glsl_layout::boolean,
     #[allow(unused)]
-    use_ao: u32,
+    use_ao: glsl_layout::boolean,
+}
+
+#[derive(Debug, Default, Clone, Copy, AsStd140)]
+struct HdrControlUniform {
+    #[allow(unused)]
+    exposure: f32,
+    #[allow(unused)]
+    gamma: f32,
+    #[allow(unused)]
+    algo: u32,
 }
 
 struct VulkanApp21 {
     device: Device,
     presenter: Presenter,
+    render_pass: RenderPass,
     #[allow(unused)]
     global_pool: DescriptorPool,
     #[allow(unused)]
@@ -74,8 +100,16 @@ struct VulkanApp21 {
     #[allow(unused)]
     global_descriptor_sets: Vec<vk::DescriptorSet>,
     scene: Scene,
+    attachment_set: AttachmentSet,
+    render_target_color: AttachmentRef,
+    postprocessing_pipelines: Vec<Rc<RefCell<Pipeline<NullVertex>>>>,
+    hdr: PostProcessingStep,
+    hdr_uniform_buffer_set: UniformBufferSet<HdrControlUniform>,
+    hdr_descriptor_set_layout: DescriptorSetLayout,
+    command_buffers: Vec<CommandBuffer>,
     materials: Vec<Rc<Material>>,
     _model: ModelNonIndexed,
+    msaa_samples: vk::SampleCountFlags,
 
     is_framebuffer_resized: bool,
     yaw_speed: f32,
@@ -106,35 +140,79 @@ impl VulkanApp21 {
                 .with_validation(true)
 		.with_default_extensions()
         )?;
-        let msaa_samples = device.get_max_usable_sample_count();
+	// TODO: figure out how to support MSAA for this engine or use FXAA or something
+        let msaa_samples = vk::SampleCountFlags::TYPE_1;//device.get_max_usable_sample_count();
 	let (surface_format, depth_format) = Presenter::get_swapchain_image_formats(&device);
-	// TODO: I don't like the fact that the programmer has to keep track of these damn indices.
-	let render_pass_builder = RenderPassBuilder::new()
-	    .with_attachment(AttachmentDescription::standard_color_intermediate(surface_format, true))
-	    .with_attachment(AttachmentDescription::standard_depth(depth_format, true))
-	    .with_attachment(AttachmentDescription::standard_color_final(surface_format, false))
-	    .with_subpass({
-		let mut subpass = Subpass::new(vk::PipelineBindPoint::GRAPHICS);
-		subpass.add_color_attachment(
-		    vk::AttachmentReference{
-			attachment: 0_u32,
-			layout: vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL,
-		    },
-		    Some(vk::AttachmentReference{
-			attachment: 2_u32,
-			layout: vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL,
-		    }),
-		);
-		subpass.set_depth_attachment(vk::AttachmentReference{
-		    attachment: 1_u32,
-		    layout: vk::ImageLayout::DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
-		});
-		subpass
-	    })
-	    .with_standard_entry_dep();
+	let mut render_pass_builder = RenderPassBuilder::new(
+	    AttachmentDescription::standard_color_final(
+		surface_format,
+		false,
+		vk::ImageUsageFlags::COLOR_ATTACHMENT,
+	    ),
+	);
+	let render_target_color = render_pass_builder.add_attachment(AttachmentDescription::new(
+	    true,
+	    vk::ImageUsageFlags::COLOR_ATTACHMENT |
+	    vk::ImageUsageFlags::INPUT_ATTACHMENT |
+	    vk::ImageUsageFlags::TRANSIENT_ATTACHMENT,
+	    vk::Format::R16G16B16_SFLOAT,
+	    vk::ImageAspectFlags::COLOR,
+	    vk::AttachmentLoadOp::CLEAR,
+	    vk::AttachmentStoreOp::STORE,
+	    vk::AttachmentLoadOp::DONT_CARE,
+	    vk::AttachmentStoreOp::DONT_CARE,
+	    vk::ImageLayout::UNDEFINED,
+	    vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL,
+	));
+	let render_target_depth = render_pass_builder.add_attachment(AttachmentDescription::standard_depth(
+	    depth_format,
+	    true,
+	    vk::ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT |
+	    vk::ImageUsageFlags::TRANSIENT_ATTACHMENT
+	));
+	let presentation_target = render_pass_builder.get_swapchain_attachment();
+	// Rendering subpass
+	render_pass_builder.add_subpass({
+	    let mut subpass = Subpass::new(vk::PipelineBindPoint::GRAPHICS);
+	    subpass.add_color_attachment(
+		render_target_color.as_vk(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL),
+		None,
+	    );
+	    subpass.set_depth_attachment(
+		render_target_depth.as_vk(vk::ImageLayout::DEPTH_STENCIL_ATTACHMENT_OPTIMAL),
+	    );
+	    subpass
+	});
+	// Postprocessing subpass
+	render_pass_builder.add_subpass({
+	    let mut subpass = Subpass::new(vk::PipelineBindPoint::GRAPHICS);
+	    subpass.add_color_attachment(
+		presentation_target.as_vk(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL),
+		None,
+	    );
+	    subpass.add_input_attachment(
+		render_target_color.as_vk(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL),
+	    );
+	    subpass
+	});
+	render_pass_builder.add_standard_entry_dep();
+	render_pass_builder.add_dep(vk::SubpassDependency{
+	    src_subpass: 0,
+	    dst_subpass: 1,
+	    src_stage_mask: vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT,
+	    dst_stage_mask: vk::PipelineStageFlags::FRAGMENT_SHADER,
+	    src_access_mask: vk::AccessFlags::COLOR_ATTACHMENT_WRITE,
+	    dst_access_mask: vk::AccessFlags::SHADER_READ,
+	    dependency_flags: vk::DependencyFlags::empty(),
+	});
+        let render_pass = RenderPass::new(
+            &device,
+            msaa_samples,
+	    render_pass_builder,
+        )?;
         let presenter = Presenter::new(
             &device,
-	    render_pass_builder,
+	    &render_pass,
 	    msaa_samples,
             60,
         )?;
@@ -158,18 +236,23 @@ impl VulkanApp21 {
 	    let mut pool_sizes: HashMap<vk::DescriptorType, u32> = HashMap::new();
 	    pool_sizes.insert(
 		vk::DescriptorType::UNIFORM_BUFFER,
-		// I think I only need 2, but let's play it safe.
-		10,
+		// This is going to be shared between rendering and HDR tonemapping.
+		20,
+	    );
+	    pool_sizes.insert(
+		vk::DescriptorType::INPUT_ATTACHMENT,
+		// This is going to be shared between rendering and HDR tonemapping.
+		20,
 	    );
 	    DescriptorPool::new(
 		&device,
 		pool_sizes,
-		// I think I only need 2, but let's play it safe.
-		10,
+		// This is going to be shared between rendering and HDR tonemapping.
+		20,
 	    )?
 	};
 
-	// TODO: I feel likw the descriptor layout, uniform buffers, and descriptor sets
+	// TODO: I feel like the descriptor layout, uniform buffers, and descriptor sets
 	//       could be created together in some convenient way.
 	let global_descriptor_set_layout = DescriptorSetLayout::new(
 	    &device,
@@ -185,11 +268,14 @@ impl VulkanApp21 {
 	let global_uniform_buffer_set = UniformBufferSet::new(
 	    &device,
 	    UniformBufferObject{
-                view: Matrix4::look_at_dir(
-                    Point3::new(0.0, 0.0, 0.0),
-                    Vector3::new(0.0, 1.0, 0.0).normalize(),
-                    Vector3::new(0.0, 0.0, 1.0),
-                ),
+                view: {
+		    let view_matrix = Matrix4::look_at_dir(
+			Point3::new(0.0, -2.0, 0.0),
+			Vector3::new(0.0, 1.0, 0.0).normalize(),
+			Vector3::new(0.0, 0.0, 1.0),
+                    );
+		    view_matrix.into()
+		},
                 proj: {
                     let mut proj = cgmath::perspective(
                         Deg(45.0),
@@ -199,24 +285,24 @@ impl VulkanApp21 {
                         100.0,
                     );
                     proj[1][1] = proj[1][1] * -1.0;
-                    proj
+		    proj.into()
                 },
-		view_pos: Vector4::new(0.0, 0.0, 0.0, 1.0),
-		view_dir: Vector4::new(0.0, 1.0, 0.0, 1.0),
+		view_pos: [0.0, -2.0, 0.0, 1.0].into(),
+		view_dir: [0.0, 1.0, 0.0, 1.0].into(),
 		light_positions: [
-		    Vector4::new(0.0, 0.0, 2.0, 1.0),
-		    Vector4::new(0.0, 0.0, 0.0, 1.0),
-		    Vector4::new(0.0, 0.0, 0.0, 1.0),
-		    Vector4::new(0.0, 0.0, 0.0, 1.0),
+		    [0.0, 0.0, 10.0, 1.0].into(),
+		    [0.0, 0.0, 0.0, 1.0].into(),
+		    [0.0, 0.0, 0.0, 1.0].into(),
+		    [0.0, 0.0, 0.0, 1.0].into(),
 		],
 		light_colors: [
-		    Vector4::new(5.0, 5.0, 5.0, 5.0),
-		    Vector4::new(0.0, 0.0, 0.0, 0.0),
-		    Vector4::new(0.0, 0.0, 0.0, 0.0),
-		    Vector4::new(0.0, 0.0, 0.0, 0.0),
+		    [500.0, 500.0, 500.0, 500.0].into(),
+		    [0.0, 0.0, 0.0, 0.0].into(),
+		    [0.0, 0.0, 0.0, 0.0].into(),
+		    [0.0, 0.0, 0.0, 0.0].into(),
 		],
-		use_parallax: 0xffffffff,
-		use_ao: 0xffffffff,
+		use_parallax: true.into(),
+		use_ao: true.into(),
 	    },
 	    max_frames_in_flight,
 	)?;
@@ -301,11 +387,18 @@ impl VulkanApp21 {
 	    &device,
 	    WINDOW_WIDTH,
 	    WINDOW_HEIGHT,
-	    &presenter,
+	    &render_pass,
 	    vert_shader,
 	    frag_shader,
-	    msaa_samples,
 	    &set_layouts,
+	    PipelineParameters::new()
+		.with_msaa_samples(msaa_samples)
+		.with_cull_mode(vk::CullModeFlags::NONE)
+		.with_front_face(vk::FrontFace::COUNTER_CLOCKWISE)
+		.with_depth_test()
+		.with_depth_write()
+		.with_depth_compare_op(vk::CompareOp::LESS)
+		.with_subpass(0),
 	)?));
 
 	let viking_room_set = Rc::new(StaticGeometrySetRenderer::new(
@@ -318,35 +411,201 @@ impl VulkanApp21 {
 	];
 
 	let scene = Scene::new(
-	    &device,
-	    &presenter,
 	    renderables,
-	    device.get_default_graphics_queue(),
+	);
+
+	let attachment_set = AttachmentSet::for_renderpass(
+	    &render_pass,
+	    WINDOW_WIDTH,
+	    WINDOW_HEIGHT,
+	    msaa_samples,
+	)?;
+
+	// Begin HDR setup
+        let vert_shader_hdr: VertexShader<NullVertex> =
+            VertexShader::from_spv_file(
+                &device,
+                Path::new("./hdr.vert.spv"),
+            )?;
+        let frag_shader_hdr = FragmentShader::from_spv_file(
+            &device,
+            Path::new("./hdr.frag.spv"),
+        )?;
+
+	let hdr_descriptor_set_layout = DescriptorSetLayout::new(
+	    &device,
+	    vec![
+		vk::DescriptorSetLayoutBinding{
+		    binding: 0,
+		    descriptor_type: vk::DescriptorType::INPUT_ATTACHMENT,
+		    descriptor_count: 1,
+		    stage_flags: vk::ShaderStageFlags::FRAGMENT,
+		    p_immutable_samplers: ptr::null(),
+		},
+		vk::DescriptorSetLayoutBinding{
+		    binding: 1,
+		    descriptor_type: vk::DescriptorType::UNIFORM_BUFFER,
+		    descriptor_count: 1,
+		    stage_flags: vk::ShaderStageFlags::FRAGMENT,
+		    p_immutable_samplers: ptr::null(),
+		},
+	    ],
+	)?;
+
+	let hdr_uniform_buffer_set = UniformBufferSet::new(
+	    &device,
+	    HdrControlUniform{
+		exposure: 1.0,
+		gamma: 2.2,
+		algo: 2,
+	    },
 	    max_frames_in_flight,
 	)?;
 
-        Ok(VulkanApp21{
-	    device,
-	    presenter,
-	    global_pool,
-	    global_descriptor_set_layout,
-	    global_uniform_buffer_set,
-	    static_geometry_pipelines: vec![static_geometry_pipeline],
-	    viking_room_set,
-	    global_descriptor_sets,
-	    scene,
-	    materials,
-            _model: model,
+	let mut hdr_descriptor_sets = vec![];
+	for frame_idx in 0..max_frames_in_flight {
+	    let items: Vec<Box<dyn DescriptorRef>> = vec![
+		// Texture 0 is the texture we wrote in HDR format.
+		Box::new(InputAttachmentRef::new(
+		    attachment_set.get(&render_target_color),
+		    vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
+		)),
+		Box::new(UniformBufferRef::new(vec![
+		    hdr_uniform_buffer_set.get_buffer(frame_idx)?,
+		])),
+	    ];
+	    let sets = global_pool.create_descriptor_sets(
+		1,
+		&hdr_descriptor_set_layout,
+		&items,
+	    )?;
+	    hdr_descriptor_sets.push(sets[0]);
+	}
 
-            is_framebuffer_resized: false,
-            yaw_speed: 0.0,
-            pitch_speed: 0.0,
-            roll_speed: 0.0,
-            camera_speed: [0.0, 0.0, 0.0].into(),
-            view_dir: Vector4::new(0.0, 1.0, 0.0, 1.0).normalize(),
-	    view_up: Vector4::new(0.0, 0.0, 1.0, 1.0).normalize(),
-	    view_right: Vector4::new(1.0, 0.0, 0.0, 1.0).normalize(),
-        })
+	let set_layouts_hdr = [&hdr_descriptor_set_layout];
+
+	let hdr_resolve_pipeline = Rc::new(RefCell::new(Pipeline::new(
+	    &device,
+	    WINDOW_WIDTH,
+	    WINDOW_HEIGHT,
+	    &render_pass,
+	    vert_shader_hdr,
+	    frag_shader_hdr,
+	    &set_layouts_hdr,
+	    PipelineParameters::new()
+		.with_cull_mode(vk::CullModeFlags::FRONT)
+		.with_front_face(vk::FrontFace::COUNTER_CLOCKWISE)
+		.with_subpass(1),
+	)?));
+
+	let hdr = PostProcessingStep::new(
+	    hdr_descriptor_sets,
+	    hdr_resolve_pipeline.clone(),
+	);
+
+	// End HDR setup
+
+        Ok({
+	    let mut this = VulkanApp21{
+		device,
+		presenter,
+		render_pass,
+		global_pool,
+		global_descriptor_set_layout,
+		global_uniform_buffer_set,
+		static_geometry_pipelines: vec![static_geometry_pipeline],
+		viking_room_set,
+		global_descriptor_sets,
+		scene,
+		attachment_set,
+		render_target_color,
+		postprocessing_pipelines: vec![hdr_resolve_pipeline],
+		hdr,
+		hdr_uniform_buffer_set,
+		hdr_descriptor_set_layout,
+		command_buffers: Vec::new(),
+		materials,
+		_model: model,
+		msaa_samples,
+
+		is_framebuffer_resized: false,
+		yaw_speed: 0.0,
+		pitch_speed: 0.0,
+		roll_speed: 0.0,
+		camera_speed: [0.0, 0.0, 0.0].into(),
+		view_dir: Vector4::new(0.0, 1.0, 0.0, 1.0).normalize(),
+		view_up: Vector4::new(0.0, 0.0, 1.0, 1.0).normalize(),
+		view_right: Vector4::new(1.0, 0.0, 0.0, 1.0).normalize(),
+            };
+	    this.rebuild_command_buffers()?;
+	    this
+	})
+    }
+
+    fn rebuild_command_buffers(&mut self) -> anyhow::Result<()> {
+        let max_frames_in_flight = self.presenter.get_num_images();
+	self.command_buffers.clear();
+
+	let clear_values = [
+            vk::ClearValue{
+                color: vk::ClearColorValue{
+                    float32: [0.0, 0.0, 0.0, 1.0],
+                }
+            },
+            vk::ClearValue{
+                color: vk::ClearColorValue{
+                    float32: [0.0, 0.0, 0.0, 1.0],
+                }
+            },
+            vk::ClearValue{
+                depth_stencil: vk::ClearDepthStencilValue{
+                    depth: 1.0,
+                    stencil: 0,
+                }
+            },
+        ];
+
+	for frame_idx in 0..max_frames_in_flight {
+	    let command_buffer = CommandBuffer::new(
+		&self.device,
+		vk::CommandBufferLevel::PRIMARY,
+		self.device.get_default_graphics_queue(),
+	    )?;
+	    {
+		let buffer_writer = command_buffer.record(
+		    vk::CommandBufferUsageFlags::SIMULTANEOUS_USE,
+		)?;
+		{
+		    let render_pass_writer = buffer_writer.begin_render_pass(
+			&self.presenter,
+			&self.render_pass,
+			&clear_values,
+			&self.attachment_set,
+			frame_idx,
+		    );
+		    self.scene.write_command_buffer(frame_idx, &render_pass_writer)?;
+		    render_pass_writer.next_subpass();
+		    self.hdr.write_draw_command(frame_idx, &render_pass_writer)?;
+		}
+	    }
+	    self.command_buffers.push(command_buffer);
+	}
+	Ok(())
+    }
+
+    fn submit_command_buffer(&self, idx: usize) -> anyhow::Result<()> {
+	if idx > self.command_buffers.len() {
+	    return Err(anyhow!(
+		"Tried to submit command buffer #{} of {}",
+		idx,
+		self.command_buffers.len(),
+	    ));
+	}
+	self.presenter.submit_command_buffer(
+	    // TODO: idx is out of sync with current_frame!
+	    &self.command_buffers[idx],
+	    vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT,
+	)
     }
 
     fn update_uniform_buffer(&mut self, current_image: usize, delta_time: f32) {
@@ -384,25 +643,75 @@ impl VulkanApp21 {
         self.global_uniform_buffer_set.update_and_upload(
 	    current_image,
 	    |uniform_transform: &mut UniformBufferObject| -> anyhow::Result<()> {
-		uniform_transform.view_pos =
-                    uniform_transform.view_pos
-                    + (view_up * camera_speed.z * delta_time)
-                    + (view_dir * camera_speed.y * delta_time)
-                    + (view_right * -camera_speed.x * delta_time);
-		uniform_transform.view_pos.w = 1.0;
+		uniform_transform.view_pos = {
+		    let mut view_pos: Vector4<f32> = uniform_transform.view_pos.into();
+                    view_pos += view_up * camera_speed.z * delta_time;
+		    view_pos += view_dir * camera_speed.y * delta_time;
+		    view_pos += view_right * -camera_speed.x * delta_time;
+		    view_pos.w = 1.0;
+		    view_pos.into()
+		};
 
-		uniform_transform.view =
-                    Matrix4::look_at_dir(
+		uniform_transform.view = {
+		    let view_pos: Vector4<f32> = uniform_transform.view_pos.into();
+                    let view_matrix: Matrix4<f32> = Matrix4::look_at_dir(
 			Point3::new(
-                            uniform_transform.view_pos.x,
-                            uniform_transform.view_pos.y,
-                            uniform_transform.view_pos.z,
+                            view_pos.x,
+                            view_pos.y,
+                            view_pos.z,
 			),
 			view_dir.truncate(),
 			view_up.truncate(),
                     );
+		    view_matrix.into()
+		};
 		Ok(())
             }).unwrap();
+    }
+
+    fn resize(&mut self, width: usize, height: usize) -> anyhow::Result<()> {
+	println!("Resizing...");
+	for pipeline_cell in self.static_geometry_pipelines.iter_mut() {
+	    let mut pipeline = pipeline_cell.borrow_mut();
+	    pipeline.update_viewport(
+		width,
+		height,
+		&self.render_pass,
+	    )?;
+	}
+	for pipeline_cell in self.postprocessing_pipelines.iter_mut() {
+	    let mut pipeline = pipeline_cell.borrow_mut();
+	    pipeline.update_viewport(
+		width,
+		height,
+		&self.render_pass,
+	    )?;
+	}
+	self.attachment_set.resize(&self.render_pass, width, height, self.msaa_samples)?;
+	let mut hdr_descriptor_sets = vec![];
+	for frame_idx in 0..self.presenter.get_num_images() {
+	    let items: Vec<Box<dyn DescriptorRef>> = vec![
+		// Texture 0 is the texture we wrote in HDR format.
+		Box::new(InputAttachmentRef::new(
+		    self.attachment_set.get(&self.render_target_color),
+		    vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
+		)),
+		Box::new(UniformBufferRef::new(vec![
+		    self.hdr_uniform_buffer_set.get_buffer(frame_idx)?,
+		])),
+	    ];
+	    let sets = self.global_pool.create_descriptor_sets(
+		1,
+		&self.hdr_descriptor_set_layout,
+		&items,
+	    )?;
+	    hdr_descriptor_sets.push(sets[0]);
+	}
+	self.hdr.replace_descriptor_sets(hdr_descriptor_sets);
+	// TODO: I don't like having this in here, but any resize operation requires
+	//       the command buffers to be re-created, right?
+	self.rebuild_command_buffers()?;
+	Ok(())
     }
 }
 
@@ -410,18 +719,11 @@ impl VulkanApp for VulkanApp21 {
     // TODO: lots of repetition here.  I need to find a solution for that.
     fn draw_frame(&mut self) -> anyhow::Result<()>{
 	if self.is_framebuffer_resized {
-	    self.presenter.fit_to_window()?;
+	    self.presenter.fit_to_window(&self.render_pass)?;
 	    let (width, height) = self.presenter.get_dimensions();
 	    self.is_framebuffer_resized = false;
-	    {
-		let mut pipeline = self.static_geometry_pipelines[0].borrow_mut();
-		pipeline.update_viewport(
-		    width,
-		    height,
-		    &self.presenter,
-		)?;
-	    }
-	    self.scene.rebuild_command_buffers(&self.device, &self.presenter)?;
+	    println!("Resizing before doing anything else");
+	    self.resize(width, height)?;
 	}
 	// Hopefully, this will give me the precision I need for the calculation but the
 	// compactness and speed I want for the result.
@@ -429,6 +731,7 @@ impl VulkanApp for VulkanApp21 {
         let since_last_frame = self.presenter.wait_for_next_frame()?;
 	let delta_time = ((since_last_frame.as_nanos() as f64) / 1_000_000_000_f64) as f32;
         let image_index = self.presenter.acquire_next_image(
+	    &self.render_pass,
 	    &mut |width: usize, height: usize| -> anyhow::Result<()> {
 		maybe_new_dimensions = Some((width, height));
 		Ok(())
@@ -436,46 +739,25 @@ impl VulkanApp for VulkanApp21 {
 	)?;
 
 	if let Some((width, height)) = maybe_new_dimensions {
-	    {
-		let mut pipeline = self.static_geometry_pipelines[0].borrow_mut();
-		pipeline.update_viewport(
-		    width,
-		    height,
-		    &self.presenter,
-		)?;
-	    }
-	    self.scene.rebuild_command_buffers(&self.device, &self.presenter)?;
+	    println!("Resizing after acquiring an image from the swapchain");
+	    self.resize(width, height)?;
 	}
 
         self.update_uniform_buffer(image_index as usize, delta_time);
 
         //self.presenter.submit_graphics_command_buffer(&self.command_buffers[image_index as usize])?;
-	let (image_available_semaphore, render_finished_semaphore, inflight_fence) =
-	    self.presenter.get_sync_objects();
-	self.scene.submit_command_buffer(
-	    image_index as usize,
-	    vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT,
-	    image_available_semaphore,
-	    render_finished_semaphore,
-	    inflight_fence,
-	)?;
+	self.submit_command_buffer(image_index as usize)?;
 	self.presenter.present_frame(
 	    image_index,
+	    &self.render_pass,
 	    &mut |width: usize, height: usize| -> anyhow::Result<()> {
 		maybe_new_dimensions = Some((width, height));
 		Ok(())
 	    },
 	)?;
 	if let Some((width, height)) = maybe_new_dimensions {
-	    {
-		let mut pipeline = self.static_geometry_pipelines[0].borrow_mut();
-		pipeline.update_viewport(
-		    width,
-		    height,
-		    &self.presenter,
-		)?;
-	    }
-	    self.scene.rebuild_command_buffers(&self.device, &self.presenter)?;
+	    println!("Resizing after rendering");
+	    self.resize(width, height)?;
 	}
         Ok(())
     }
@@ -523,24 +805,18 @@ impl VulkanApp for VulkanApp21 {
     fn toggle_parallax(&mut self) -> bool {
         self.global_uniform_buffer_set.update(
 	    |uniform_transform: &mut UniformBufferObject| -> anyhow::Result<bool> {
-		uniform_transform.use_parallax = if uniform_transform.use_parallax > 0 {
-                    0
-		} else {
-                    0xffffffff
-		};
-		Ok(uniform_transform.use_parallax != 0)
+		let val: bool = uniform_transform.use_parallax.into();
+		uniform_transform.use_parallax = (!val).into();
+		Ok(uniform_transform.use_parallax.into())
             }).unwrap()
     }
 
     fn toggle_ao(&mut self) -> bool {
         self.global_uniform_buffer_set.update(
 	    |uniform_transform: &mut UniformBufferObject| -> anyhow::Result<bool> {
-		uniform_transform.use_ao = if uniform_transform.use_ao > 0 {
-                    0
-		} else {
-                    0xffffffff
-		};
-		Ok(uniform_transform.use_ao != 0)
+		let val: bool = uniform_transform.use_ao.into();
+		uniform_transform.use_ao = (!val).into();
+		Ok(uniform_transform.use_ao.into())
             }).unwrap()
     }
 }

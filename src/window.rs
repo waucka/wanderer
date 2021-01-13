@@ -3,6 +3,7 @@ use winit::event_loop::{EventLoop, ControlFlow};
 use winit::window::{Window, WindowBuilder};
 
 const PAINT_FPS_COUNTER: bool = false;
+const ABORT_ON_FRAME_DRAW_FAILURE: bool = true;
 
 pub fn init_window(
     event_loop: &EventLoop<()>,
@@ -196,7 +197,11 @@ pub fn main_loop<A: 'static + VulkanApp>(event_loop: EventLoop<()>, mut vulkan_a
             },
             Event::RedrawRequested(_window_id) => {
                 if let Err(e) = vulkan_app.draw_frame() {
-		    println!("Failed to draw frame: {:?}", e);
+		    if ABORT_ON_FRAME_DRAW_FAILURE {
+			std::process::abort();
+		    } else {
+			println!("Failed to draw frame: {:?}", e);
+		    }
 		}
                 if PAINT_FPS_COUNTER {
                     println!("FPS: {}", vulkan_app.get_fps());

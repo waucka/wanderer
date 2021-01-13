@@ -4,9 +4,10 @@ use ash::vk;
 use std::cell::RefCell;
 use std::rc::Rc;
 use std::ptr;
+use std::os::raw::c_void;
 
 use super::{Device, InnerDevice, Queue};
-use super::renderer::{Presenter, Pipeline};
+use super::renderer::{Presenter, RenderPass, Pipeline, AttachmentSet};
 use super::buffer::{VertexBuffer, IndexBuffer, UploadSourceBuffer, HasBuffer};
 use super::image::Image;
 use super::shader::Vertex;
@@ -187,7 +188,9 @@ impl<'a> BufferWriter<'a> {
     pub fn begin_render_pass(
 	&self,
 	presenter: &Presenter,
+	render_pass: &RenderPass,
 	clear_values: &[vk::ClearValue],
+	attachment_set: &AttachmentSet,
 	framebuffer_index: usize,
     ) -> RenderPassWriter {
 	let render_area = vk::Rect2D{
@@ -197,10 +200,25 @@ impl<'a> BufferWriter<'a> {
 	    },
 	    extent: presenter.get_render_extent()
 	};
+
+	let vk_attachments = {
+	    let mut vk_attachments = vec![];
+	    vk_attachments.push(presenter.get_framebuffer_image_view(framebuffer_index));
+	    vk_attachments.extend(attachment_set.get_image_views());
+	    vk_attachments
+	};
+
+	let attachment_info = vk::RenderPassAttachmentBeginInfo{
+	    s_type: vk::StructureType::RENDER_PASS_ATTACHMENT_BEGIN_INFO,
+	    p_next: ptr::null(),
+	    attachment_count: vk_attachments.len() as u32,
+	    p_attachments: vk_attachments.as_ptr(),
+	};
+
 	let render_pass_begin_info = vk::RenderPassBeginInfo{
 	    s_type: vk::StructureType::RENDER_PASS_BEGIN_INFO,
-	    p_next: ptr::null(),
-	    render_pass: presenter.render_pass.render_pass,
+	    p_next: (&attachment_info as *const _) as *const c_void,
+	    render_pass: render_pass.render_pass,
 	    framebuffer: presenter.get_framebuffer(framebuffer_index),
 	    render_area,
 	    clear_value_count: clear_values.len() as u32,
@@ -382,6 +400,21 @@ impl<'a> RenderPassWriter<'a> {
 	}
     }
 
+    pub fn draw_no_vbo(
+	&self,
+	num_vertices: usize,
+	num_instances: usize,
+    ) {
+	unsafe {
+	    self.device.device.cmd_draw(
+		self.command_buffer.buf,
+		num_vertices as u32,
+		num_instances as u32,
+		0, 0,
+	    );
+	}
+    }
+
     pub fn draw_indexed<T>(
 	&self,
 	vertex_buffer: &VertexBuffer<T>,
@@ -410,6 +443,16 @@ impl<'a> RenderPassWriter<'a> {
 	    );
 	}
     }
+
+    pub fn next_subpass(&self) {
+	unsafe {
+	    self.device.device.cmd_next_subpass(
+		self.command_buffer.buf,
+		vk::SubpassContents::INLINE,
+	    );
+	}
+    }
+
 }
 
 impl<'a> Drop for RenderPassWriter<'a> {

@@ -1,6 +1,7 @@
 use ash::version::DeviceV1_0;
 use ash::vk;
 use anyhow::anyhow;
+use glsl_layout::AsStd140;
 
 use std::rc::Rc;
 use std::ptr;
@@ -176,13 +177,16 @@ impl UploadSourceBuffer {
         size: vk::DeviceSize,
     ) -> anyhow::Result<Self> {
         Ok(Self {
-            buf: Buffer::new(
-		device,
-                size,
-                vk::BufferUsageFlags::TRANSFER_SRC,
-                vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
-                vk::SharingMode::EXCLUSIVE,
-            )?,
+            buf: {
+		let buf = Buffer::new(
+		    device,
+                    size,
+                    vk::BufferUsageFlags::TRANSFER_SRC,
+                    vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
+                    vk::SharingMode::EXCLUSIVE,
+		)?;
+		buf
+	    },
         })
     }
 
@@ -292,13 +296,17 @@ impl HasBuffer for IndexBuffer {
     }
 }
 
-pub struct UniformBuffer<T> {
+pub struct UniformBuffer<T: AsStd140>
+where <T as AsStd140>::Std140: Sized
+{
     buf: Buffer,
     size: usize,
     _phantom: std::marker::PhantomData<T>,
 }
 
-impl<T> UniformBuffer<T> {
+impl<T: AsStd140> UniformBuffer<T>
+where <T as AsStd140>::Std140: Sized
+{
     pub fn new(
 	device: &Device,
 	initial_value: Option<&T>,
@@ -329,12 +337,13 @@ impl<T> UniformBuffer<T> {
 	&self,
 	new_value: &T,
     ) -> anyhow::Result<()> {
-	let new_value_size = std::mem::size_of_val::<T>(new_value);
+	let std140_val = new_value.std140();
+	let new_value_size = std::mem::size_of_val::<T::Std140>(&std140_val);
         if self.size > new_value_size {
 	    Err(anyhow!("Tried to write {} bytes to a {}-byte uniform buffer!", new_value_size, self.size))
 	} else {
             self.buf.with_memory_mapping(|mmap| {
-		mmap.copy_item(new_value);
+		mmap.copy_item(&std140_val);
 		Ok(())
 	    })
 	}
@@ -345,18 +354,24 @@ impl<T> UniformBuffer<T> {
     }
 }
 
-impl<T> HasBuffer for UniformBuffer<T> {
+impl<T: AsStd140> HasBuffer for UniformBuffer<T>
+where <T as AsStd140>::Std140: Sized
+{
     fn get_buffer(&self) -> vk::Buffer {
 	self.buf.buf
     }
 }
 
-pub struct UniformBufferSet<T> {
+pub struct UniformBufferSet<T: AsStd140>
+where <T as AsStd140>::Std140: Sized
+{
     uniform_struct: T,
     uniform_buffers: Vec<Rc<UniformBuffer<T>>>,
 }
 
-impl<T> UniformBufferSet<T> {
+impl<T: AsStd140> UniformBufferSet<T>
+where <T as AsStd140>::Std140: Sized
+{
     pub fn new(
 	device: &Device,
 	uniform_struct: T,

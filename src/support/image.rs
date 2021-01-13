@@ -3,6 +3,7 @@ use ash::vk;
 
 use std::rc::Rc;
 use std::ptr;
+use std::os::raw::c_void;
 
 use super::{Device, InnerDevice};
 use super::utils::{Defaulted, find_memory_type};
@@ -23,18 +24,18 @@ pub struct ImageBuilder {
 
 impl ImageBuilder {
     #[allow(unused)]
-    pub fn new1d(length: u32) -> Self {
-        ImageBuilder::new(vec![length], vk::ImageType::TYPE_1D)
+    pub fn new1d(length: usize) -> Self {
+        ImageBuilder::new(vec![length as u32], vk::ImageType::TYPE_1D)
     }
 
     #[allow(unused)]
-    pub fn new2d(width: u32, height: u32) -> Self {
-        ImageBuilder::new(vec![width, height], vk::ImageType::TYPE_2D)
+    pub fn new2d(width: usize, height: usize) -> Self {
+        ImageBuilder::new(vec![width as u32, height as u32], vk::ImageType::TYPE_2D)
     }
 
     #[allow(unused)]
-    pub fn new3d(width: u32, height: u32, depth: u32) -> Self {
-        ImageBuilder::new(vec![width, height, depth], vk::ImageType::TYPE_3D)
+    pub fn new3d(width: usize, height: usize, depth: usize) -> Self {
+        ImageBuilder::new(vec![width as u32, height as u32, depth as u32], vk::ImageType::TYPE_3D)
     }
 
     fn new(size: Vec<u32>, image_type: vk::ImageType) -> Self {
@@ -118,9 +119,17 @@ impl Image {
             },
 	    _ => panic!("Invalid image type (what did you do?)"),
         };
-        let image_create_info = vk::ImageCreateInfo{
+
+	let format_list_bs = vk::ImageFormatListCreateInfo{
+	    s_type: vk::StructureType::IMAGE_FORMAT_LIST_CREATE_INFO,
+	    p_next: ptr::null(),
+	    view_format_count: 1,
+	    p_view_formats: &format,
+	};
+
+	let image_create_info = vk::ImageCreateInfo{
             s_type: vk::StructureType::IMAGE_CREATE_INFO,
-            p_next: ptr::null(),
+            p_next: (&format_list_bs as *const _) as *const c_void,
             flags: vk::ImageCreateFlags::empty(),
             image_type,
             format,
@@ -190,6 +199,7 @@ impl Image {
 		let dst_access_mask;
 		let source_stage;
 		let destination_stage;
+		let mut aspect_mask = vk::ImageAspectFlags::COLOR;
 
 		if old_layout == vk::ImageLayout::UNDEFINED
                     && new_layout == vk::ImageLayout::TRANSFER_DST_OPTIMAL
@@ -205,8 +215,36 @@ impl Image {
                     dst_access_mask = vk::AccessFlags::SHADER_READ;
                     source_stage = vk::PipelineStageFlags::TRANSFER;
                     destination_stage = vk::PipelineStageFlags::FRAGMENT_SHADER;
+		} else if old_layout == vk::ImageLayout::UNDEFINED
+		    && new_layout == vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL
+		{
+		    src_access_mask = vk::AccessFlags::empty();
+		    dst_access_mask = vk::AccessFlags::COLOR_ATTACHMENT_WRITE;
+		    source_stage = vk::PipelineStageFlags::TOP_OF_PIPE;
+		    destination_stage = vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT;
+		} else if old_layout == vk::ImageLayout::UNDEFINED
+		    && new_layout == vk::ImageLayout::DEPTH_STENCIL_ATTACHMENT_OPTIMAL
+		{
+		    src_access_mask = vk::AccessFlags::empty();
+		    dst_access_mask = vk::AccessFlags::DEPTH_STENCIL_ATTACHMENT_WRITE;
+		    source_stage = vk::PipelineStageFlags::TOP_OF_PIPE;
+		    destination_stage = vk::PipelineStageFlags::ALL_GRAPHICS;
+		    aspect_mask = vk::ImageAspectFlags::DEPTH;
+		} else if old_layout == vk::ImageLayout::UNDEFINED
+		    && new_layout == vk::ImageLayout::GENERAL
+		{
+		    src_access_mask = vk::AccessFlags::empty();
+		    dst_access_mask = vk::AccessFlags::COLOR_ATTACHMENT_WRITE | vk::AccessFlags::INPUT_ATTACHMENT_READ;
+		    source_stage = vk::PipelineStageFlags::TOP_OF_PIPE;
+		    destination_stage = vk::PipelineStageFlags::ALL_GRAPHICS;
+		} else if old_layout == new_layout {
+		    return Ok(());
 		} else {
-                    return Err(anyhow::anyhow!("Unsupported layout transition"));
+                    return Err(anyhow::anyhow!(
+			"Unsupported layout transition {:?} -> {:?}",
+			old_layout,
+			new_layout,
+		    ));
 		}
 
 		let image_barriers = [vk::ImageMemoryBarrier{
@@ -220,7 +258,7 @@ impl Image {
                     dst_queue_family_index: vk::QUEUE_FAMILY_IGNORED,
                     image: self.img,
                     subresource_range: vk::ImageSubresourceRange{
-			aspect_mask: vk::ImageAspectFlags::COLOR,
+			aspect_mask,
 			base_mip_level: 0,
 			level_count: mip_levels,
 			base_array_layer: 0,
@@ -279,7 +317,7 @@ pub struct ImageView {
 }
 
 impl ImageView {
-    pub (in super) fn from_image(
+    pub fn from_image(
         image: &Image,
         aspect_flags: vk::ImageAspectFlags,
         mip_levels: u32,

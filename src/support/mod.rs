@@ -809,10 +809,17 @@ fn create_logical_device(
         ..Default::default()
     };
 
+    let mut imageless_framebuffer_features = vk::PhysicalDeviceImagelessFramebufferFeatures{
+	s_type: vk::StructureType::PHYSICAL_DEVICE_IMAGELESS_FRAMEBUFFER_FEATURES,
+	p_next: ptr::null_mut(),
+	..Default::default()
+    };
+    imageless_framebuffer_features.imageless_framebuffer = vk::TRUE;
+
     let descriptor_indexing_features = {
 	let mut descriptor_indexing_features = vk::PhysicalDeviceDescriptorIndexingFeatures{
 	    s_type: vk::StructureType::PHYSICAL_DEVICE_DESCRIPTOR_INDEXING_FEATURES,
-	    p_next: ptr::null_mut(),
+	    p_next: (&mut imageless_framebuffer_features as *mut _) as *mut c_void,
 	    ..Default::default()
 	};
 	descriptor_indexing_features.runtime_descriptor_array = vk::TRUE;

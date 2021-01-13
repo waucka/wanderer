@@ -1,11 +1,11 @@
 use ash::version::DeviceV1_0;
 use ash::vk;
 use anyhow::anyhow;
+use glsl_layout::AsStd140;
 
 use std::collections::HashMap;
 use std::pin::Pin;
 use std::ptr;
-use std::os::raw::c_void;
 use std::rc::Rc;
 
 use super::{Device, InnerDevice};
@@ -89,11 +89,15 @@ pub trait DescriptorRef {
     fn get_type(&self) -> vk::DescriptorType;
 }
 
-pub struct UniformBufferRef<T> {
+pub struct UniformBufferRef<T: AsStd140>
+where <T as AsStd140>::Std140: Sized
+{
     uniform_buffers: Vec<Rc<UniformBuffer<T>>>,
 }
 
-impl<T> UniformBufferRef<T> {
+impl<T: AsStd140> UniformBufferRef<T>
+where <T as AsStd140>::Std140: Sized
+{
     pub fn new(uniform_buffers: Vec<Rc<UniformBuffer<T>>>) -> Self {
 	Self{
 	    uniform_buffers,
@@ -101,7 +105,9 @@ impl<T> UniformBufferRef<T> {
     }
 }
 
-impl<T> DescriptorRef for UniformBufferRef<T> {
+impl<T: AsStd140> DescriptorRef for UniformBufferRef<T>
+where <T as AsStd140>::Std140: Sized
+{
     fn get_write(&self, dst_set: vk::DescriptorSet, dst_binding: u32) -> WriteDescriptorSet {
 	let mut uniform_buffer_info = vec![];
 	for buf in self.uniform_buffers.iter() {
@@ -208,6 +214,40 @@ impl DescriptorRef for CombinedRef {
 
     fn get_type(&self) -> vk::DescriptorType {
 	vk::DescriptorType::COMBINED_IMAGE_SAMPLER
+    }
+}
+
+pub struct InputAttachmentRef {
+    texture: Rc<Texture>,
+    layout: vk::ImageLayout,
+}
+
+impl InputAttachmentRef {
+    pub fn new(texture: Rc<Texture>, layout: vk::ImageLayout) -> Self {
+	Self{
+	    texture,
+	    layout,
+	}
+    }
+}
+
+impl DescriptorRef for InputAttachmentRef {
+    fn get_write(&self, dst_set: vk::DescriptorSet, dst_binding: u32) -> WriteDescriptorSet {
+	let texture_info = vec![vk::DescriptorImageInfo{
+	    sampler: vk::Sampler::null(),
+	    image_view: self.texture.image_view.view,
+	    image_layout: self.layout,
+	}];
+	WriteDescriptorSet::for_images(
+	    vk::DescriptorType::INPUT_ATTACHMENT,
+	    texture_info,
+	    dst_set,
+	    dst_binding,
+	)
+    }
+
+    fn get_type(&self) -> vk::DescriptorType {
+	vk::DescriptorType::INPUT_ATTACHMENT
     }
 }
 

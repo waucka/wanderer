@@ -1,6 +1,7 @@
 use ash::vk;
 use anyhow::anyhow;
 use cgmath::Matrix4;
+use glsl_layout::AsStd140;
 
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -21,14 +22,16 @@ use super::support::renderer::Pipeline;
 use super::support::shader::Vertex;
 use super::support::texture::Material;
 use super::scene::Renderable;
+use super::utils::{NullVertex, Vector4f, Matrix4f};
 
 const DEBUG_DESCRIPTOR_SETS: bool = false;
 
 // TODO: get rid of static geometry type UBO after validating that
 //       this approach works.
 
+#[derive(Debug, Default, Clone, Copy, AsStd140)]
 pub struct StaticGeometryTypeUBO {
-    tint: [f32; 4],
+    tint: Vector4f,
 }
 
 pub struct StaticGeometrySet<V: Vertex> {
@@ -63,7 +66,7 @@ impl<V: Vertex> StaticGeometrySet<V> {
 	let uniform_buffer_set = UniformBufferSet::new(
 	    device,
 	    StaticGeometryTypeUBO{
-		tint: [1.0, 1.0, 1.0, 1.0],
+		tint: [1.0, 1.0, 1.0, 1.0].into(),
 	    },
 	    num_frames,
 	)?;
@@ -227,7 +230,7 @@ impl<V: Vertex> StaticGeometrySet<V> {
 	let uniform_buffer_set = UniformBufferSet::new(
 	    device,
 	    StaticGeometryInstanceUBO{
-		model: model_matrix,
+		model: model_matrix.into(),
 	    },
 	    num_frames,
 	)?;
@@ -332,12 +335,56 @@ impl<V: Vertex> Renderable for StaticGeometrySetRenderer<V> {
     }
 }
 
+#[derive(Debug, Default, Clone, Copy, AsStd140)]
 pub struct StaticGeometryInstanceUBO {
     #[allow(unused)]
-    model: Matrix4<f32>,
+    model: Matrix4f,
 }
 
 pub struct StaticGeometry {
     instance_descriptor_sets: Vec<vk::DescriptorSet>,
     uniform_buffer_set: UniformBufferSet<StaticGeometryInstanceUBO>,
+}
+
+//TODO: This should probably be moved to a new module called "postprocessing" or something.
+
+pub struct PostProcessingStep {
+    global_descriptor_sets: Vec<vk::DescriptorSet>,
+    pipeline: Rc<RefCell<Pipeline<NullVertex>>>,
+}
+
+impl PostProcessingStep {
+    pub fn new(
+	global_descriptor_sets: Vec<vk::DescriptorSet>,
+	pipeline: Rc<RefCell<Pipeline<NullVertex>>>,
+    ) -> Self {
+	Self{
+	    global_descriptor_sets,
+	    pipeline,
+	}
+    }
+
+    pub fn replace_descriptor_sets(&mut self, global_descriptor_sets: Vec<vk::DescriptorSet>) {
+	self.global_descriptor_sets = global_descriptor_sets;
+    }
+}
+
+impl Renderable for PostProcessingStep {
+    fn write_draw_command(&self, idx: usize, writer: &RenderPassWriter) -> anyhow::Result<()> {
+	writer.bind_pipeline(self.pipeline.clone());
+	let descriptor_sets = [
+	    self.global_descriptor_sets[idx],
+	];
+	if DEBUG_DESCRIPTOR_SETS {
+	    println!("Binding descriptor sets...");
+	    println!("\tSet 0: {:?}", descriptor_sets[0]);
+	}
+	writer.bind_descriptor_sets(self.pipeline.borrow().get_layout(), &descriptor_sets);
+	writer.draw_no_vbo(3, 1);
+	Ok(())
+    }
+
+    fn sync_uniform_buffers(&self, _idx: usize) -> anyhow::Result<()> {
+	Ok(())
+    }
 }

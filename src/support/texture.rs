@@ -20,17 +20,59 @@ pub struct Texture {
 }
 
 impl Texture {
-    pub fn from_file(device: &Device, image_path: &Path) -> anyhow::Result<Self> {
+    pub fn from_image_builder(
+	device: &Device,
+	aspect: vk::ImageAspectFlags,
+	mip_levels: u32,
+	desired_layout: vk::ImageLayout,
+	builder: ImageBuilder,
+    ) -> anyhow::Result<Self> {
+	Self::from_image_builder_internal(
+	    device.inner.clone(),
+	    aspect,
+	    mip_levels,
+	    desired_layout,
+	    builder,
+	)
+    }
+
+    pub (in super) fn from_image_builder_internal(
+	device: Rc<InnerDevice>,
+	aspect: vk::ImageAspectFlags,
+	mip_levels: u32,
+	desired_layout: vk::ImageLayout,
+	builder: ImageBuilder,
+    ) -> anyhow::Result<Self> {
+	let mut image = Image::new_internal(device.clone(), builder)?;
+	image.transition_layout(vk::ImageLayout::UNDEFINED, desired_layout, mip_levels)?;
+	let image_view = ImageView::from_image(
+	    &image,
+	    aspect,
+	    mip_levels,
+	)?;
+	Ok(Self{
+	    device,
+	    image,
+	    image_view,
+	    mip_levels,
+	})
+    }
+
+    pub fn get_image_debug_str(&self) -> String {
+	format!("{:?}", self.image.img)
+    }
+
+    pub fn from_file(device: &Device, image_path: &Path, srgb: bool) -> anyhow::Result<Self> {
 	let start = std::time::Instant::now();
 	let image_object = match image::open(image_path) {
 	    Ok(v) => v,
 	    Err(e) => return Err(anyhow!("{}: {}", image_path.display(), e)),
 	};
 	println!("Loaded {} in {}ms", image_path.display(), start.elapsed().as_millis());
-	Self::from_image(device, image_object)
+	Self::from_image(device, image_object, srgb)
     }
 
-    pub fn from_image(device: &Device, mut image_object: DynamicImage) -> anyhow::Result<Self> {
+    pub fn from_image(device: &Device, mut image_object: DynamicImage, srgb: bool) -> anyhow::Result<Self> {
 	image_object = image_object.flipv();
 	let (image_width, image_height) = (image_object.width(), image_object.height());
 	let image_size =
@@ -57,10 +99,14 @@ impl Texture {
 
 	let mut image = Image::new(
 	    device,
-	    ImageBuilder::new2d(image_width, image_height)
+	    ImageBuilder::new2d(image_width as usize, image_height as usize)
 		.with_mip_levels(mip_levels)
 		.with_num_samples(vk::SampleCountFlags::TYPE_1)
-		.with_format(vk::Format::R8G8B8A8_UNORM)
+		.with_format(if srgb {
+		    vk::Format::R8G8B8A8_SRGB
+		} else {
+		    vk::Format::R8G8B8A8_UNORM
+		})
 		.with_tiling(vk::ImageTiling::OPTIMAL)
 		.with_usage(
 		    vk::ImageUsageFlags::TRANSFER_SRC |
@@ -329,12 +375,12 @@ impl Material {
 	normal_path: &Path,
 	material_path: &Path,
     ) -> anyhow::Result<Self> {
-	let color_texture = Texture::from_file(device, color_path)?;
+	let color_texture = Texture::from_file(device, color_path, true)?;
 	let mip_levels = color_texture.get_mip_levels();
 	Ok(Self {
 	    color: Rc::new(color_texture),
-	    normal: Rc::new(Texture::from_file(device, normal_path)?),
-	    material: Rc::new(Texture::from_file(device, material_path)?),
+	    normal: Rc::new(Texture::from_file(device, normal_path, false)?),
+	    material: Rc::new(Texture::from_file(device, material_path, false)?),
 	    sampler: Rc::new(Sampler::new(
 		&device,
 		mip_levels,

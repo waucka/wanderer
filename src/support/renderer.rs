@@ -6,17 +6,19 @@ use std::ffi::CString;
 use std::time::{Instant, Duration};
 use std::rc::Rc;
 use std::ptr;
+use std::os::raw::c_void;
 use std::pin::Pin;
 
 use super::{Device, InnerDevice, Queue};
 use super::image::{Image, ImageView, ImageBuilder};
+use super::texture::Texture;
 use super::shader::{VertexShader, FragmentShader, Vertex, GenericShader};
 use super::descriptor::DescriptorSetLayout;
+use super::command_buffer::CommandBuffer;
 
 pub struct Presenter {
     device: Rc<InnerDevice>,
     swapchain: Swapchain,
-    pub (in super) render_pass: RenderPass,
     msaa_samples: vk::SampleCountFlags,
 
     image_available_semaphores: Vec<vk::Semaphore>,
@@ -48,17 +50,11 @@ impl Presenter {
 
     pub fn new(
 	device: &Device,
-	render_pass_builder: RenderPassBuilder,
+	render_pass: &RenderPass,
 	msaa_samples: vk::SampleCountFlags,
 	desired_fps: u32,
     ) -> anyhow::Result<Self> {
-        let render_pass = RenderPass::new(
-            &device,
-            msaa_samples,
-	    render_pass_builder,
-        )?;
-
-	let swapchain = Swapchain::new(device.inner.clone(), msaa_samples, &render_pass)?;
+	let swapchain = Swapchain::new(device.inner.clone(), msaa_samples, render_pass)?;
 
         let mut image_available_semaphores = vec![];
         let mut render_finished_semaphores = vec![];
@@ -100,7 +96,6 @@ impl Presenter {
 	Ok(Self{
 	    device: device.inner.clone(),
 	    swapchain,
-	    render_pass,
 	    msaa_samples,
 
 	    image_available_semaphores,
@@ -131,6 +126,10 @@ impl Presenter {
 
     pub (in super) fn get_framebuffer(&self, framebuffer_index: usize) -> vk::Framebuffer {
 	self.swapchain.frames[framebuffer_index].framebuffer.framebuffer
+    }
+
+    pub (in super) fn get_framebuffer_image_view(&self, framebuffer_index: usize) -> vk::ImageView {
+	self.swapchain.frames[framebuffer_index].imageview.view
     }
 
     #[allow(unused)]
@@ -166,7 +165,7 @@ impl Presenter {
 	Ok(self.last_frame.elapsed())
     }
 
-    pub fn acquire_next_image<F>(&mut self, viewport_update: &mut F) -> anyhow::Result<u32>
+    pub fn acquire_next_image<F>(&mut self, render_pass: &RenderPass, viewport_update: &mut F) -> anyhow::Result<u32>
     where
         F: FnMut(usize, usize) -> anyhow::Result<()>
     {
@@ -182,11 +181,11 @@ impl Presenter {
                 Ok(res) => res,
                 Err(vk_result) => match vk_result {
                     vk::Result::ERROR_OUT_OF_DATE_KHR => {
-                        self.fit_to_window()?;
+                        self.fit_to_window(render_pass)?;
 			let (width, height) = self.get_dimensions();
 			viewport_update(width, height)?;
 			// TODO: I hope I don't regret doing this.
-			return self.acquire_next_image(viewport_update);
+			return self.acquire_next_image(render_pass, viewport_update);
                     },
                     _ => return Err(anyhow!("Failed to acquire swap chain image")),
                 },
@@ -214,7 +213,7 @@ impl Presenter {
     // Fuck that.  It looks like I can't avoid it for the pipeline, so I'll
     // have to figure out how to signal the engine to do that.
     // Same deal with the command buffers.
-    pub fn fit_to_window(&mut self) -> anyhow::Result<()> {
+    pub fn fit_to_window(&mut self, render_pass: &RenderPass) -> anyhow::Result<()> {
         unsafe {
             self.device.device
                 .device_wait_idle()?;
@@ -225,7 +224,7 @@ impl Presenter {
 	self.swapchain = Swapchain::new(
 	    self.device.clone(),
 	    self.msaa_samples,
-	    &self.render_pass,
+	    render_pass,
 	)?;
 
 	Ok(())
@@ -243,7 +242,21 @@ impl Presenter {
 	)
     }
 
-    pub fn present_frame<F>(&mut self, image_index: u32, viewport_update: &mut F) -> anyhow::Result<()>
+    pub fn submit_command_buffer(
+	&self,
+	command_buffer: &CommandBuffer,
+	wait_stage: vk::PipelineStageFlags,
+    ) -> anyhow::Result<()> {
+	let idx = self.current_frame;
+	command_buffer.submit_synced(
+	    wait_stage,
+	    self.image_available_semaphores[idx],
+	    self.render_finished_semaphores[idx],
+	    self.inflight_fences[idx],
+	)
+    }
+
+    pub fn present_frame<F>(&mut self, image_index: u32, render_pass: &RenderPass, viewport_update: &mut F) -> anyhow::Result<()>
     where
         F: FnMut(usize, usize) -> anyhow::Result<()>
     {
@@ -276,7 +289,7 @@ impl Presenter {
         };
 
 	if is_resized {
-	    self.fit_to_window()?;
+	    self.fit_to_window(render_pass)?;
 	    let (width, height) = self.get_dimensions();
 	    viewport_update(width, height)?;
 	}
@@ -360,7 +373,7 @@ fn choose_swapchain_extent(
 struct FrameData {
     _frame_index: u32,
     _image: Image,
-    _imageview: ImageView,
+    imageview: ImageView,
     framebuffer: Framebuffer,
 }
 
@@ -370,11 +383,6 @@ struct Swapchain {
     _swapchain_format: vk::Format,
     pub (in super) swapchain_extent: vk::Extent2D,
     frames: Vec<FrameData>,
-
-    _color_image: Image,
-    _color_image_view: ImageView,
-    _depth_image: Image,
-    _depth_image_view: ImageView,
 }
 
 impl Swapchain {
@@ -449,40 +457,6 @@ impl Swapchain {
 		.get_swapchain_images(swapchain)?
 	};
 
-	let color_image = Image::new_internal(
-	    device.clone(),
-	    ImageBuilder::new2d(extent.width, extent.height)
-		.with_mip_levels(1)
-		.with_num_samples(msaa_samples)
-		.with_format(surface_format.format)
-		.with_tiling(vk::ImageTiling::OPTIMAL)
-		.with_usage(
-		    vk::ImageUsageFlags::TRANSIENT_ATTACHMENT | vk::ImageUsageFlags::COLOR_ATTACHMENT,
-		)
-		.with_required_memory_properties(vk::MemoryPropertyFlags::DEVICE_LOCAL),
-	)?;
-	let color_image_view = ImageView::from_image(
-	    &color_image,
-	    vk::ImageAspectFlags::COLOR,
-	    1,
-	)?;
-
-	let depth_format = super::utils::find_depth_format(&device.instance, device.physical_device);
-	let depth_image = Image::new_internal(device.clone(),
-	    ImageBuilder::new2d(extent.width, extent.height)
-		.with_mip_levels(1)
-		.with_num_samples(msaa_samples)
-		.with_format(depth_format)
-		.with_tiling(vk::ImageTiling::OPTIMAL)
-		.with_usage(vk::ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT)
-		.with_required_memory_properties(vk::MemoryPropertyFlags::DEVICE_LOCAL),
-	)?;
-	let depth_image_view = ImageView::from_image(
-	    &depth_image,
-            vk::ImageAspectFlags::DEPTH,
-            1,
-	)?;
-
 	let mut frames = Vec::new();
 	let mut frame_index: u32 = 0;
 	for swapchain_image in swapchain_images.iter() {
@@ -503,25 +477,17 @@ impl Swapchain {
 		1,
 	    )?;
 
-	    // TODO: is this the right thing to do?
-	    let attachments = vec![
-		&color_image_view,
-		&depth_image_view,
-		&imageview,
-	    ];
-
 	    let framebuffer = Framebuffer::new(
 		device.clone(),
 		extent.width,
 		extent.height,
-		&attachments,
-		render_pass.render_pass,
+		&render_pass,
 	    )?;
 
 	    frames.push(FrameData{
 		_frame_index: frame_index,
 		_image: image,
-		_imageview: imageview,
+		imageview,
 		framebuffer,
 	    });
 	    frame_index += 1;
@@ -533,11 +499,6 @@ impl Swapchain {
 	    _swapchain_format: surface_format.format,
 	    swapchain_extent: extent,
 	    frames,
-
-	    _color_image: color_image,
-	    _color_image_view: color_image_view,
-	    _depth_image: depth_image,
-	    _depth_image_view: depth_image_view,
 	})
     }
 
@@ -578,6 +539,79 @@ impl Drop for Swapchain {
     }
 }
 
+pub struct PipelineParameters {
+    msaa_samples: vk::SampleCountFlags,
+    cull_mode: vk::CullModeFlags,
+    front_face: vk::FrontFace,
+    primitive_restart_enable: vk::Bool32,
+    topology: vk::PrimitiveTopology,
+    depth_test_enable: vk::Bool32,
+    depth_write_enable: vk::Bool32,
+    depth_compare_op: vk::CompareOp,
+    subpass: u32,
+}
+
+impl PipelineParameters {
+    pub fn new() -> Self {
+	Self{
+	    msaa_samples: vk::SampleCountFlags::TYPE_1,
+	    cull_mode: vk::CullModeFlags::BACK,
+	    front_face: vk::FrontFace::COUNTER_CLOCKWISE,
+	    primitive_restart_enable: vk::FALSE,
+	    topology: vk::PrimitiveTopology::TRIANGLE_LIST,
+	    depth_test_enable: vk::FALSE,
+	    depth_write_enable: vk::FALSE,
+	    depth_compare_op: vk::CompareOp::ALWAYS,
+	    subpass: 0,
+	}
+    }
+
+    pub fn with_msaa_samples(mut self, msaa_samples: vk::SampleCountFlags) -> Self {
+	self.msaa_samples = msaa_samples;
+	self
+    }
+
+    pub fn with_cull_mode(mut self, cull_mode: vk::CullModeFlags) -> Self {
+	self.cull_mode = cull_mode;
+	self
+    }
+
+    pub fn with_front_face(mut self, front_face: vk::FrontFace) -> Self {
+	self.front_face = front_face;
+	self
+    }
+
+    pub fn with_topology(mut self, topology: vk::PrimitiveTopology) -> Self {
+	self.topology = topology;
+	self
+    }
+
+    pub fn with_depth_compare_op(mut self, depth_compare_op: vk::CompareOp) -> Self {
+	self.depth_compare_op = depth_compare_op;
+	self
+    }
+
+    pub fn with_primitive_restart(mut self) -> Self {
+	self.primitive_restart_enable = vk::TRUE;
+	self
+    }
+
+    pub fn with_depth_test(mut self) -> Self {
+	self.depth_test_enable = vk::TRUE;
+	self
+    }
+
+    pub fn with_depth_write(mut self) -> Self {
+	self.depth_write_enable = vk::TRUE;
+	self
+    }
+
+    pub fn with_subpass(mut self, subpass: u32) -> Self {
+	self.subpass = subpass;
+	self
+    }
+}
+
 pub struct Pipeline<V>
 where
     V: Vertex,
@@ -587,7 +621,7 @@ where
     pub (in super) pipeline: vk::Pipeline,
     vert_shader: VertexShader<V>,
     frag_shader: FragmentShader,
-    msaa_samples: vk::SampleCountFlags,
+    params: PipelineParameters,
 }
 
 impl<V> Pipeline<V>
@@ -601,8 +635,8 @@ where
 	render_pass: &RenderPass,
 	vert_shader: VertexShader<V>,
 	frag_shader: FragmentShader,
-	msaa_samples: vk::SampleCountFlags,
 	set_layouts: &[&DescriptorSetLayout],
+	params: PipelineParameters,
     ) -> anyhow::Result<Self> {
 	let mut vk_set_layouts = vec![];
 	for layout in set_layouts.iter() {
@@ -634,7 +668,7 @@ where
 	    pipeline_layout,
 	    vert_shader_module,
 	    frag_shader_module,
-	    msaa_samples,
+	    &params,
 	)?;
 
 	Ok(Self{
@@ -643,7 +677,7 @@ where
 	    pipeline,
 	    vert_shader,
 	    frag_shader,
-	    msaa_samples,
+	    params,
 	})
     }
 
@@ -651,21 +685,21 @@ where
 	device: &Device,
 	viewport_width: usize,
 	viewport_height: usize,
-	presenter: &Presenter,
+	render_pass: &RenderPass,
 	vert_shader: VertexShader<V>,
 	frag_shader: FragmentShader,
-	msaa_samples: vk::SampleCountFlags,
 	set_layouts: &[&DescriptorSetLayout],
+	params: PipelineParameters,
     ) -> anyhow::Result<Self> {
 	Self::from_inner(
 	    device.inner.clone(),
 	    viewport_width,
 	    viewport_height,
-	    &presenter.render_pass,
+	    render_pass,
 	    vert_shader,
 	    frag_shader,
-	    msaa_samples,
 	    set_layouts,
+	    params,
 	)
     }
 
@@ -677,7 +711,7 @@ where
 	pipeline_layout: vk::PipelineLayout,
 	vert_shader_module: vk::ShaderModule,
 	frag_shader_module: vk::ShaderModule,
-	msaa_samples: vk::SampleCountFlags,
+	params: &PipelineParameters,
     ) -> anyhow::Result<vk::Pipeline> {
 	let main_function_name = CString::new("main").unwrap();
 
@@ -704,22 +738,34 @@ where
 
 	let binding_description = V::get_binding_description();
 	let attribute_description = V::get_attribute_descriptions();
+	let vertex_attribute_description_count = attribute_description.len() as u32;
+	let vertex_binding_description_count = binding_description.len() as u32;
+	let p_vertex_attribute_descriptions = if vertex_attribute_description_count == 0 {
+	    ptr::null()
+	} else {
+	    attribute_description.as_ptr()
+	};
+	let p_vertex_binding_descriptions = if vertex_binding_description_count == 0 {
+	    ptr::null()
+	} else {
+	    binding_description.as_ptr()
+	};
 
 	let vertex_input_state_create_info = vk::PipelineVertexInputStateCreateInfo{
             s_type: vk::StructureType::PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO,
             p_next: ptr::null(),
             flags: vk::PipelineVertexInputStateCreateFlags::empty(),
-            vertex_attribute_description_count: attribute_description.len() as u32,
-            p_vertex_attribute_descriptions: attribute_description.as_ptr(),
-            vertex_binding_description_count: binding_description.len() as u32,
-            p_vertex_binding_descriptions: binding_description.as_ptr(),
+            vertex_attribute_description_count,
+            p_vertex_attribute_descriptions,
+            vertex_binding_description_count,
+            p_vertex_binding_descriptions,
 	};
 	let vertex_input_assembly_state_info = vk::PipelineInputAssemblyStateCreateInfo{
             s_type: vk::StructureType::PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO,
             p_next: ptr::null(),
             flags: vk::PipelineInputAssemblyStateCreateFlags::empty(),
-            primitive_restart_enable: vk::FALSE,
-            topology: vk::PrimitiveTopology::TRIANGLE_LIST,
+            primitive_restart_enable: params.primitive_restart_enable,
+            topology: params.topology,
 	};
 
 	let viewports = [vk::Viewport{
@@ -754,8 +800,8 @@ where
             p_next: ptr::null(),
             flags: vk::PipelineRasterizationStateCreateFlags::empty(),
             depth_clamp_enable: vk::FALSE,
-            cull_mode: vk::CullModeFlags::BACK,
-            front_face: vk::FrontFace::COUNTER_CLOCKWISE,
+            cull_mode: params.cull_mode,
+            front_face: params.front_face,
             line_width: 1.0,
             polygon_mode: vk::PolygonMode::FILL,
             rasterizer_discard_enable: vk::FALSE,
@@ -769,7 +815,7 @@ where
             s_type: vk::StructureType::PIPELINE_MULTISAMPLE_STATE_CREATE_INFO,
             p_next: ptr::null(),
             flags: vk::PipelineMultisampleStateCreateFlags::empty(),
-            rasterization_samples: msaa_samples,
+            rasterization_samples: params.msaa_samples,
             sample_shading_enable: vk::FALSE,
             min_sample_shading: 0.0,
             p_sample_mask: ptr::null(),
@@ -790,9 +836,9 @@ where
             s_type: vk::StructureType::PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO,
             p_next: ptr::null(),
             flags: vk::PipelineDepthStencilStateCreateFlags::empty(),
-            depth_test_enable: vk::TRUE,
-            depth_write_enable: vk::TRUE,
-            depth_compare_op: vk::CompareOp::LESS,
+            depth_test_enable: params.depth_test_enable,
+            depth_write_enable: params.depth_write_enable,
+            depth_compare_op: params.depth_compare_op,
             depth_bounds_test_enable: vk::FALSE,
             stencil_test_enable: vk::FALSE,
             front: stencil_state,
@@ -839,7 +885,7 @@ where
             p_dynamic_state: ptr::null(),
             layout: pipeline_layout,
             render_pass: render_pass,
-            subpass: 0,
+            subpass: params.subpass,
             base_pipeline_handle: vk::Pipeline::null(),
             base_pipeline_index: -1,
 	}];
@@ -864,7 +910,7 @@ where
 	&mut self,
 	viewport_width: usize,
 	viewport_height: usize,
-	presenter: &Presenter,
+	render_pass: &RenderPass,
     ) -> anyhow::Result<()> {
 	let vert_shader_module = self.vert_shader.get_shader().shader;
 	let frag_shader_module = self.frag_shader.get_shader().shader;
@@ -872,11 +918,11 @@ where
 	    self.device.clone(),
 	    viewport_width,
 	    viewport_height,
-	    presenter.render_pass.render_pass,
+	    render_pass.render_pass,
 	    self.pipeline_layout,
 	    vert_shader_module,
 	    frag_shader_module,
-	    self.msaa_samples,
+	    &self.params,
 	)?;
 	self.pipeline = pipeline;
 	Ok(())
@@ -901,7 +947,9 @@ where
 
 pub struct AttachmentDescription {
     is_multisampled: bool,
+    usage: vk::ImageUsageFlags,
     format: vk::Format,
+    aspect: vk::ImageAspectFlags,
     load_op: vk::AttachmentLoadOp,
     store_op: vk::AttachmentStoreOp,
     stencil_load_op: vk::AttachmentLoadOp,
@@ -913,7 +961,9 @@ pub struct AttachmentDescription {
 impl AttachmentDescription {
     pub fn new(
 	is_multisampled: bool,
+	usage: vk::ImageUsageFlags,
 	format: vk::Format,
+	aspect: vk::ImageAspectFlags,
 	load_op: vk::AttachmentLoadOp,
 	store_op: vk::AttachmentStoreOp,
 	stencil_load_op: vk::AttachmentLoadOp,
@@ -923,7 +973,9 @@ impl AttachmentDescription {
     ) -> Self {
 	Self{
 	    is_multisampled,
+	    usage,
 	    format,
+	    aspect,
 	    load_op,
 	    store_op,
 	    stencil_load_op,
@@ -933,12 +985,18 @@ impl AttachmentDescription {
 	}
     }
 
-    pub fn standard_color_intermediate(format: vk::Format, is_multisampled: bool) -> Self {
+    pub fn standard_color_render_target(
+	format: vk::Format,
+	is_multisampled: bool,
+	usage: vk::ImageUsageFlags,
+    ) -> Self {
 	Self{
 	    is_multisampled,
+	    usage,
 	    format,
+	    aspect: vk::ImageAspectFlags::COLOR,
             load_op: vk::AttachmentLoadOp::CLEAR,
-            store_op: vk::AttachmentStoreOp::DONT_CARE,
+            store_op: vk::AttachmentStoreOp::STORE,
             stencil_load_op: vk::AttachmentLoadOp::DONT_CARE,
             stencil_store_op: vk::AttachmentStoreOp::DONT_CARE,
             initial_layout: vk::ImageLayout::UNDEFINED,
@@ -946,16 +1004,41 @@ impl AttachmentDescription {
 	}
     }
 
-    pub fn standard_color_final(format: vk::Format, should_clear: bool) -> Self {
+    pub fn standard_color_intermediate(
+	format: vk::Format,
+	is_multisampled: bool,
+	usage: vk::ImageUsageFlags,
+    ) -> Self {
+	Self{
+	    is_multisampled,
+	    usage,
+	    format,
+	    aspect: vk::ImageAspectFlags::COLOR,
+            load_op: vk::AttachmentLoadOp::DONT_CARE,
+            store_op: vk::AttachmentStoreOp::STORE,
+            stencil_load_op: vk::AttachmentLoadOp::DONT_CARE,
+            stencil_store_op: vk::AttachmentStoreOp::DONT_CARE,
+            initial_layout: vk::ImageLayout::UNDEFINED,
+            final_layout: vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL,
+	}
+    }
+
+    pub fn standard_color_final(
+	format: vk::Format,
+	should_clear: bool,
+	usage: vk::ImageUsageFlags,
+    ) -> Self {
 	Self{
 	    is_multisampled: false,
+	    usage,
 	    format,
+	    aspect: vk::ImageAspectFlags::COLOR,
             load_op: if should_clear {
 		vk::AttachmentLoadOp::CLEAR
 	    } else {
 		vk::AttachmentLoadOp::DONT_CARE
 	    },
-            store_op: vk::AttachmentStoreOp::DONT_CARE,
+            store_op: vk::AttachmentStoreOp::STORE,
             stencil_load_op: vk::AttachmentLoadOp::DONT_CARE,
             stencil_store_op: vk::AttachmentStoreOp::DONT_CARE,
             initial_layout: vk::ImageLayout::UNDEFINED,
@@ -963,12 +1046,18 @@ impl AttachmentDescription {
 	}
     }
 
-    pub fn standard_depth(format: vk::Format, is_multisampled: bool) -> Self {
+    pub fn standard_depth(
+	format: vk::Format,
+	is_multisampled: bool,
+	usage: vk::ImageUsageFlags,
+    ) -> Self {
 	Self{
 	    is_multisampled,
+	    usage,
 	    format,
+	    aspect: vk::ImageAspectFlags::DEPTH,
             load_op: vk::AttachmentLoadOp::CLEAR,
-            store_op: vk::AttachmentStoreOp::DONT_CARE,
+            store_op: vk::AttachmentStoreOp::STORE,
             stencil_load_op: vk::AttachmentLoadOp::DONT_CARE,
             stencil_store_op: vk::AttachmentStoreOp::DONT_CARE,
             initial_layout: vk::ImageLayout::UNDEFINED,
@@ -1039,6 +1128,7 @@ impl Subpass {
 	    panic!("This subpass already has color attachments without resolve attachments!");
 	}
 	if self.color_attachments.len() == self.resolve_attachments.len()
+	    && self.resolve_attachments.len() != 0
 	    && att_resolve.is_none() {
 	    panic!("This subpass requires a resolve attachment for every color attachment!");
 	}
@@ -1142,6 +1232,99 @@ impl Subpass {
     }
 }
 
+pub struct AttachmentSet {
+    attachments: Vec<Rc<Texture>>,
+}
+
+impl AttachmentSet {
+    pub fn for_renderpass(
+	render_pass: &RenderPass,
+	width: usize,
+	height: usize,
+	msaa_samples: vk::SampleCountFlags,
+    ) -> anyhow::Result<Self> {
+	Ok(Self{
+	    attachments: Self::create_attachment_textures(
+		render_pass,
+		width,
+		height,
+		msaa_samples,
+	    )?,
+	})
+    }
+
+    pub fn get(&self, att_ref: &AttachmentRef) -> Rc<Texture> {
+	// We subtract one from the index because the index is based on the first attachment
+	// being the swapchain attachment.
+	self.attachments[att_ref.idx - 1].clone()
+    }
+
+    pub (in super) fn get_image_views(&self) -> Vec<vk::ImageView> {
+	let mut image_views = Vec::new();
+	for att in self.attachments.iter() {
+	    image_views.push(att.image_view.view);
+	}
+	image_views
+    }
+
+    fn create_attachment_textures(
+	render_pass: &RenderPass,
+	width: usize,
+	height: usize,
+	msaa_samples: vk::SampleCountFlags,
+    ) -> anyhow::Result<Vec<Rc<Texture>>> {
+	let mut textures = Vec::new();
+	// Skip the first attachment in the list.  By convention, that one is the swapchain image.
+	let att_slice = &render_pass.attachments[1..];
+	for att in att_slice.iter() {
+	    textures.push(
+		Rc::new(
+		    Texture::from_image_builder_internal(
+			render_pass.device.clone(),
+			att.aspect,
+			1,
+			att.initial_layout,
+			ImageBuilder::new2d(width, height)
+			    .with_num_samples(msaa_samples)
+			    .with_format(att.format)
+			    .with_usage(att.usage)
+		    )?
+		)
+	    );
+	}
+	Ok(textures)
+    }
+
+    pub fn resize(
+	&mut self,
+	render_pass: &RenderPass,
+	width: usize,
+	height: usize,
+	msaa_samples: vk::SampleCountFlags,
+    ) -> anyhow::Result<()> {
+	self.attachments = Self::create_attachment_textures(
+	    render_pass,
+	    width,
+	    height,
+	    msaa_samples,
+	)?;
+	Ok(())
+    }
+}
+
+pub struct AttachmentRef {
+    idx: usize,
+}
+
+impl AttachmentRef {
+    pub fn as_vk(&self, layout: vk::ImageLayout) -> vk::AttachmentReference {
+	vk::AttachmentReference{
+	    attachment: self.idx as u32,
+	    layout,
+	}
+    }
+}
+
 pub struct RenderPassBuilder {
     attachments: Vec<AttachmentDescription>,
     subpasses: Vec<Subpass>,
@@ -1149,20 +1332,29 @@ pub struct RenderPassBuilder {
 }
 
 impl RenderPassBuilder {
-    pub fn new() -> Self {
+    pub fn new(swapchain_att: AttachmentDescription) -> Self {
 	Self{
-	    attachments: Vec::new(),
+	    attachments: vec![swapchain_att],
 	    subpasses: Vec::new(),
 	    deps: Vec::new(),
 	}
     }
 
-    pub fn with_attachment(mut self, att: AttachmentDescription) -> Self {
-	self.attachments.push(att);
-	self
+    pub fn get_swapchain_attachment(&self) -> AttachmentRef {
+	AttachmentRef{
+	    idx: 0,
+	}
     }
 
-    pub fn with_subpass(mut self, subpass: Subpass) -> Self {
+    pub fn add_attachment(&mut self, att: AttachmentDescription) -> AttachmentRef {
+	let idx = self.attachments.len();
+	self.attachments.push(att);
+	AttachmentRef{
+	    idx,
+	}
+    }
+
+    pub fn add_subpass(&mut self, subpass: Subpass) {
 	let att_sets = [
 	    ("input", &subpass.input_attachments),
 	    ("color", &subpass.color_attachments),
@@ -1193,23 +1385,22 @@ impl RenderPassBuilder {
 	}
 
 	self.subpasses.push(subpass);
-	self
     }
 
-    pub fn with_standard_entry_dep(self) -> Self {
-	self.with_dep(vk::SubpassDependency{
+    pub fn add_standard_entry_dep(&mut self) {
+	self.add_dep(vk::SubpassDependency{
             src_subpass: vk::SUBPASS_EXTERNAL,
             dst_subpass: 0,
             src_stage_mask: vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT,
             dst_stage_mask: vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT,
-            src_access_mask: vk::AccessFlags::empty(),
+            src_access_mask: vk::AccessFlags::MEMORY_READ,
             dst_access_mask: vk::AccessFlags::COLOR_ATTACHMENT_READ
 		| vk::AccessFlags::COLOR_ATTACHMENT_WRITE,
             dependency_flags: vk::DependencyFlags::empty(),
 	})
     }
 
-    pub fn with_dep(mut self, dep: vk::SubpassDependency) -> Self {
+    pub fn add_dep(&mut self, dep: vk::SubpassDependency) {
 	if dep.src_subpass != vk::SUBPASS_EXTERNAL
 	    && dep.src_subpass as usize > self.subpasses.len() {
 		panic!(
@@ -1227,22 +1418,22 @@ impl RenderPassBuilder {
 		);
 	    }
 	self.deps.push(dep);
-	self
     }
 }
 
 pub struct RenderPass {
     device: Rc<InnerDevice>,
     pub (in super) render_pass: vk::RenderPass,
+    attachments: Vec<AttachmentDescription>,
 }
 
 impl RenderPass {
-    fn new(
+    pub fn new(
 	device: &Device,
 	msaa_samples: vk::SampleCountFlags,
 	builder: RenderPassBuilder,
     ) -> anyhow::Result<Self> {
-	let (attachments, subpasses, _subpass_data, deps) = match builder {
+	let (attachments, vk_attachments, subpasses, _subpass_data, deps) = match builder {
 	    RenderPassBuilder{
 		attachments,
 		mut subpasses,
@@ -1259,7 +1450,7 @@ impl RenderPass {
 		    _subpass_data.push(subpass_data);
 		    vk_subpasses.push(vk_subpass);
 		}
-		(vk_attachments, vk_subpasses, _subpass_data, deps)
+		(attachments, vk_attachments, vk_subpasses, _subpass_data, deps)
 	    }
 	};
 
@@ -1267,8 +1458,8 @@ impl RenderPass {
             s_type: vk::StructureType::RENDER_PASS_CREATE_INFO,
             p_next: ptr::null(),
             flags: vk::RenderPassCreateFlags::empty(),
-            attachment_count: attachments.len() as u32,
-            p_attachments: attachments.as_ptr(),
+            attachment_count: vk_attachments.len() as u32,
+            p_attachments: vk_attachments.as_ptr(),
             subpass_count: subpasses.len() as u32,
             p_subpasses: subpasses.as_ptr(),
             dependency_count: deps.len() as u32,
@@ -1280,8 +1471,30 @@ impl RenderPass {
 		device: device.inner.clone(),
 		render_pass: device.inner.device
 		    .create_render_pass(&render_pass_create_info, None)?,
+		attachments,
 	    })
 	}
+    }
+
+    fn get_attachment_infos(&self, width: u32, height: u32) -> (Vec<Pin<Vec<vk::Format>>>, Vec<vk::FramebufferAttachmentImageInfo>) {
+	let mut image_infos = vec![];
+	let mut formats = vec![];
+	for att in self.attachments.iter() {
+	    let view_formats = Pin::new(vec![att.format]);
+	    image_infos.push(vk::FramebufferAttachmentImageInfo{
+		s_type: vk::StructureType::FRAMEBUFFER_ATTACHMENT_IMAGE_INFO,
+		p_next: ptr::null(),
+		flags: vk::ImageCreateFlags::empty(),
+		usage: att.usage,
+		width: width,
+		height: height,
+		layer_count: 1,
+		view_format_count: view_formats.len() as u32,
+		p_view_formats: view_formats.as_ptr(),
+	    });
+	    formats.push(view_formats);
+	}
+	(formats, image_infos)
     }
 }
 
@@ -1303,22 +1516,23 @@ impl Framebuffer {
 	device: Rc<InnerDevice>,
 	width: u32,
 	height: u32,
-	attachments: &[&ImageView],
-	render_pass: vk::RenderPass,
+	render_pass: &RenderPass,
     ) -> anyhow::Result<Self> {
-        let mut vk_attachments = vec![];
-	for att in attachments {
-	    vk_attachments.push(att.view);
-	}
-	
+	let (_formats, attachment_image_infos) = render_pass.get_attachment_infos(width, height);
+	let attachments_info = vk::FramebufferAttachmentsCreateInfo{
+	    s_type: vk::StructureType::FRAMEBUFFER_ATTACHMENTS_CREATE_INFO,
+	    p_next: ptr::null(),
+	    attachment_image_info_count: attachment_image_infos.len() as u32,
+	    p_attachment_image_infos: attachment_image_infos.as_ptr(),
+	};
 
         let framebuffer_create_info = vk::FramebufferCreateInfo{
 	    s_type: vk::StructureType::FRAMEBUFFER_CREATE_INFO,
-	    p_next: ptr::null(),
-	    flags: vk::FramebufferCreateFlags::empty(),
-	    render_pass: render_pass,
-	    attachment_count: vk_attachments.len() as u32,
-	    p_attachments: vk_attachments.as_ptr(),
+	    p_next: (&attachments_info as *const _) as *const c_void,
+	    flags: vk::FramebufferCreateFlags::IMAGELESS,
+	    render_pass: render_pass.render_pass,
+	    attachment_count: attachments_info.attachment_image_info_count,
+	    p_attachments: ptr::null(),
 	    width,
 	    height,
 	    layers: 1,
