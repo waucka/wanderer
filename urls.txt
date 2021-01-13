@@ -41,3 +41,5 @@ http://www.adriancourreges.com/blog/2016/09/09/doom-2016-graphics-study/
 https://simoncoenen.com/blog/programming/graphics/DoomEternalStudy.html
 # Game development with explanatory videos
 https://hero.handmade.network/episode/code
+# CC music
+http://dig.ccmixter.org/games
