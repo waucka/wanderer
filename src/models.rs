@@ -110,12 +110,15 @@ impl ModelNonIndexed {
         &self.vertices
     }
 }
+
+#[allow(unused)]
 pub struct Model {
     vertices: Vec<Vertex>,
     indices: Vec<u32>
 }
 
 impl Model {
+    #[allow(unused)]
     pub fn load(obj_path: &Path) -> anyhow::Result<Self> {
         let model_obj = tobj::load_obj(obj_path, true)?;
 
@@ -222,10 +225,12 @@ impl Model {
         })
     }
 
+    #[allow(unused)]
     pub fn get_vertices(&self) -> &[Vertex] {
         &self.vertices
     }
 
+    #[allow(unused)]
     pub fn get_indices(&self) -> &[u32] {
         &self.indices
     }

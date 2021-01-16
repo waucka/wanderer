@@ -19,7 +19,7 @@ pub fn init_window(
 }
 
 pub trait VulkanApp {
-    fn draw_frame(&mut self) -> anyhow::Result<()>;
+    fn draw_frame(&mut self, raw_input: egui::RawInput) -> anyhow::Result<()>;
     fn get_fps(&self) -> u32;
     fn wait_device_idle(&self) -> anyhow::Result<()>;
     fn resize_framebuffer(&mut self);
@@ -32,6 +32,7 @@ pub trait VulkanApp {
     fn set_z_speed(&mut self, speed: f32);
     fn toggle_parallax(&mut self) -> bool;
     fn toggle_ao(&mut self) -> bool;
+    fn get_egui_ctx_ref(&self) -> &egui::CtxRef;
 }
 
 pub fn main_loop<A: 'static + VulkanApp>(event_loop: EventLoop<()>, mut vulkan_app: A) {
@@ -48,6 +49,7 @@ pub fn main_loop<A: 'static + VulkanApp>(event_loop: EventLoop<()>, mut vulkan_a
     let mut down_arrow_down = false;
     let mut right_arrow_down = false;
     let mut shift_down = false;
+    let raw_input: egui::RawInput = Default::default();
     event_loop.run(move |event, _, control_flow| {
         match event {
             Event::WindowEvent { event, .. } => {
@@ -196,7 +198,7 @@ pub fn main_loop<A: 'static + VulkanApp>(event_loop: EventLoop<()>, mut vulkan_a
                 vulkan_app.window_ref().request_redraw();
             },
             Event::RedrawRequested(_window_id) => {
-                if let Err(e) = vulkan_app.draw_frame() {
+                if let Err(e) = vulkan_app.draw_frame(raw_input.clone()) {
 		    if ABORT_ON_FRAME_DRAW_FAILURE {
 			std::process::abort();
 		    } else {

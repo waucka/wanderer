@@ -13,7 +13,7 @@ pub trait HasBuffer {
     fn get_buffer(&self) -> vk::Buffer;
 }
 
-struct MemoryMapping<T> {
+pub struct MemoryMapping<T> {
     device: Rc<InnerDevice>,
     mem: vk::DeviceMemory,
     data_ptr: *mut T,
@@ -60,15 +60,16 @@ impl<T> Drop for MemoryMapping<T> {
     }
 }
 
-struct Buffer {
+pub struct Buffer {
     device: Rc<InnerDevice>,
     pub (in super) buf: vk::Buffer,
     mem: vk::DeviceMemory,
+    size: vk::DeviceSize,
 }
 
 impl Buffer {
     fn new(
-        device: &Device,
+        device: Rc<InnerDevice>,
         size: vk::DeviceSize,
         usage: vk::BufferUsageFlags,
         required_memory_flags: vk::MemoryPropertyFlags,
@@ -86,15 +87,15 @@ impl Buffer {
         };
 
         let buffer = unsafe {
-            device.inner.device
+            device.device
                 .create_buffer(&buffer_create_info, None)?
         };
 
-        let mem_requirements = unsafe { device.inner.device.get_buffer_memory_requirements(buffer) };
+        let mem_requirements = unsafe { device.device.get_buffer_memory_requirements(buffer) };
         let memory_type = super::utils::find_memory_type(
             mem_requirements.memory_type_bits,
             required_memory_flags,
-            &device.inner.memory_properties,
+            &device.memory_properties,
         );
 
         let allocate_info = vk::MemoryAllocateInfo{
@@ -105,39 +106,50 @@ impl Buffer {
         };
 
         let buffer_memory = unsafe {
-            device.inner.device
+            device.device
                 .allocate_memory(&allocate_info, None)?
         };
 
         unsafe {
-            device.inner.device
+            device.device
                 .bind_buffer_memory(buffer, buffer_memory, 0)?
         }
 
         Ok(Buffer{
-            device: device.inner.clone(),
+            device: device.clone(),
             buf: buffer,
             mem: buffer_memory,
+	    size,
         })
     }
 
     pub fn copy(
-        &self,
-        dst_buffer: &Buffer,
-        size: vk::DeviceSize,
+        src_buffer: Rc<Buffer>,
+        dst_buffer: Rc<Buffer>,
 	queue: Rc<Queue>,
     ) -> anyhow::Result<()> {
+	if src_buffer.size > dst_buffer.size {
+	    return Err(anyhow!(
+		"Tried to copy a {} byte buffer into a {} byte buffer!",
+		src_buffer.size,
+		dst_buffer.size,
+	    ));
+	}
         CommandBuffer::run_oneshot_internal(
-	    self.device.clone(),
+	   src_buffer.device.clone(),
 	    queue,
 	    |writer| {
 		let copy_regions = [vk::BufferCopy{
 		    src_offset: 0,
 		    dst_offset: 0,
-		    size,
+		    size: src_buffer.size,
 		}];
 
-		writer.copy_buffer(self, dst_buffer, &copy_regions);
+		writer.copy_buffer(
+		    Rc::clone(&src_buffer),
+		    Rc::clone(&dst_buffer),
+		    &copy_regions,
+		);
 		Ok(())
 	    }
 	)
@@ -168,7 +180,7 @@ impl Drop for Buffer {
 }
 
 pub struct UploadSourceBuffer {
-    buf: Buffer,
+    buf: Rc<Buffer>,
 }
 
 impl UploadSourceBuffer {
@@ -177,16 +189,13 @@ impl UploadSourceBuffer {
         size: vk::DeviceSize,
     ) -> anyhow::Result<Self> {
         Ok(Self {
-            buf: {
-		let buf = Buffer::new(
-		    device,
-                    size,
-                    vk::BufferUsageFlags::TRANSFER_SRC,
-                    vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
-                    vk::SharingMode::EXCLUSIVE,
-		)?;
-		buf
-	    },
+            buf: Rc::new(Buffer::new(
+		Rc::clone(&device.inner),
+                size,
+                vk::BufferUsageFlags::TRANSFER_SRC,
+                vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
+                vk::SharingMode::EXCLUSIVE,
+	    )?),
         })
     }
 
@@ -204,8 +213,15 @@ impl HasBuffer for UploadSourceBuffer {
     }
 }
 
+impl Drop for UploadSourceBuffer {
+    fn drop(&mut self) {
+	// Drop has been implemented solely so that UploadSourceBuffers can be recorded as
+	// dependencies for CommandBuffers.
+    }
+}
+
 pub struct VertexBuffer<T> {
-    buf: Buffer,
+    buf: Rc<Buffer>,
     len: usize,
     _phantom: std::marker::PhantomData<T>,
 }
@@ -218,18 +234,18 @@ impl<T> VertexBuffer<T> {
 	let buffer_size = std::mem::size_of_val(data) as vk::DeviceSize;
 	let upload_buffer = UploadSourceBuffer::new(device, buffer_size)?;
 	upload_buffer.copy_data(data)?;
-	let vertex_buffer = Buffer::new(
-	    device,
+	let vertex_buffer = Rc::new(Buffer::new(
+	    Rc::clone(&device.inner),
             buffer_size,
             vk::BufferUsageFlags::TRANSFER_DST | vk::BufferUsageFlags::VERTEX_BUFFER,
             vk::MemoryPropertyFlags::DEVICE_LOCAL,
 	    // TODO: is this really what we want?
 	    vk::SharingMode::EXCLUSIVE,
-	)?;
+	)?);
 
-	upload_buffer.buf.copy(
-	    &vertex_buffer,
-	    buffer_size,
+	Buffer::copy(
+	    Rc::clone(&upload_buffer.buf),
+	    Rc::clone(&vertex_buffer),
 	    device.inner.get_default_transfer_queue(),
 	)?;
 
@@ -251,12 +267,20 @@ impl<V> HasBuffer for VertexBuffer<V> {
     }
 }
 
+impl<V> Drop for VertexBuffer<V> {
+    fn drop(&mut self) {
+	// Drop has been implemented solely so that VertexBuffers can be recorded as
+	// dependencies for CommandBuffers.
+    }
+}
+
 pub struct IndexBuffer {
-    buf: Buffer,
+    buf: Rc<Buffer>,
     len: usize,
 }
 
 impl IndexBuffer {
+    #[allow(unused)]
     pub fn new(
 	device: &Device,
 	data: &[u32],
@@ -264,18 +288,18 @@ impl IndexBuffer {
 	let buffer_size = std::mem::size_of_val(data) as vk::DeviceSize;
 	let upload_buffer = UploadSourceBuffer::new(device, buffer_size)?;
 	upload_buffer.copy_data(data)?;
-	let index_buffer = Buffer::new(
-	    device,
+	let index_buffer = Rc::new(Buffer::new(
+	    Rc::clone(&device.inner),
             buffer_size,
             vk::BufferUsageFlags::TRANSFER_DST | vk::BufferUsageFlags::INDEX_BUFFER,
             vk::MemoryPropertyFlags::DEVICE_LOCAL,
 	    // TODO: Is this actually what we want in multiqueue scenarios?
 	    vk::SharingMode::EXCLUSIVE,
-	)?;
+	)?);
 
-	upload_buffer.buf.copy(
-	    &index_buffer,
-	    buffer_size,
+	Buffer::copy(
+	    Rc::clone(&upload_buffer.buf),
+	    Rc::clone(&index_buffer),
 	    device.inner.get_default_transfer_queue(),
 	)?;
 
@@ -296,10 +320,17 @@ impl HasBuffer for IndexBuffer {
     }
 }
 
+impl Drop for IndexBuffer {
+    fn drop(&mut self) {
+	// Drop has been implemented solely so that IndexBuffers can be recorded as
+	// dependencies for CommandBuffers.
+    }
+}
+
 pub struct UniformBuffer<T: AsStd140>
 where <T as AsStd140>::Std140: Sized
 {
-    buf: Buffer,
+    buf: Rc<Buffer>,
     size: usize,
     _phantom: std::marker::PhantomData<T>,
 }
@@ -312,13 +343,13 @@ where <T as AsStd140>::Std140: Sized
 	initial_value: Option<&T>,
     ) -> anyhow::Result<Self> {
 	let size = std::mem::size_of::<T>();
-	let buffer = Buffer::new(
-	    device,
+	let buffer = Rc::new(Buffer::new(
+	    Rc::clone(&device.inner),
             size as u64,
             vk::BufferUsageFlags::UNIFORM_BUFFER,
             vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
 	    vk::SharingMode::EXCLUSIVE,
-	)?;
+	)?);
 
 	let this = Self{
 	    buf: buffer,
@@ -362,6 +393,15 @@ where <T as AsStd140>::Std140: Sized
     }
 }
 
+impl<T: AsStd140> Drop for UniformBuffer<T>
+where <T as AsStd140>::Std140: Sized
+{
+    fn drop(&mut self) {
+	// Drop has been implemented solely so that UniformBuffers can be recorded as
+	// dependencies for CommandBuffers.
+    }
+}
+
 pub struct UniformBufferSet<T: AsStd140>
 where <T as AsStd140>::Std140: Sized
 {
@@ -375,10 +415,9 @@ where <T as AsStd140>::Std140: Sized
     pub fn new(
 	device: &Device,
 	uniform_struct: T,
-	num_swapchain_images: usize,
     ) -> anyhow::Result<Self> {
 	let mut uniform_buffers = vec![];
-	for _ in 0..num_swapchain_images {
+	for _ in 0..super::MAX_FRAMES_IN_FLIGHT {
 	    uniform_buffers.push(Rc::new(UniformBuffer::new(device, Some(&uniform_struct))?));
 	}
 	Ok(Self{
@@ -439,9 +478,5 @@ where <T as AsStd140>::Std140: Sized
 		i,
 	    ))
 	}
-    }
-
-    fn get_buffer_unchecked(&self, i: usize) -> &UniformBuffer<T> {
-	&self.uniform_buffers[i]
     }
 }

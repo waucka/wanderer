@@ -7,24 +7,89 @@ use std::ptr;
 use std::os::raw::c_void;
 
 use super::{Device, InnerDevice, Queue};
+use super::descriptor::DescriptorSet;
 use super::renderer::{Presenter, RenderPass, Pipeline, AttachmentSet};
-use super::buffer::{VertexBuffer, IndexBuffer, UploadSourceBuffer, HasBuffer};
+use super::buffer::{VertexBuffer, IndexBuffer, UploadSourceBuffer, HasBuffer, Buffer};
 use super::image::Image;
 use super::shader::Vertex;
+
+pub struct SecondaryCommandBuffer {
+    buf: RefCell<CommandBuffer>,
+}
+
+impl SecondaryCommandBuffer {
+    pub fn new(
+	device: &Device,
+	queue: Rc<Queue>,
+    ) -> anyhow::Result<Rc<SecondaryCommandBuffer>> {
+	let secondary = Rc::new(
+	    SecondaryCommandBuffer{
+		buf: RefCell::new(CommandBuffer::from_inner_device(
+		    Rc::clone(&device.inner),
+		    vk::CommandBufferLevel::SECONDARY,
+		    Rc::clone(&queue),
+		)?),
+	    });
+	Ok(secondary)
+    }
+
+    pub fn record<T, R>(
+	&self,
+	usage_flags: vk::CommandBufferUsageFlags,
+	render_pass: &RenderPass,
+	subpass: u32,
+	write_fn: T,
+    ) -> anyhow::Result<R>
+    where
+        T: FnMut(&mut BufferWriter) -> anyhow::Result<R>
+    {
+	let mut buf = self.buf.borrow_mut();
+	let inheritance_info = vk::CommandBufferInheritanceInfo{
+	    s_type: vk::StructureType::COMMAND_BUFFER_INHERITANCE_INFO,
+	    p_next: ptr::null(),
+	    render_pass: render_pass.render_pass,
+	    subpass,
+	    // TODO: see if I can avoid doing this (might have negative effects on performance)
+	    framebuffer: vk::Framebuffer::null(),//presenter.get_framebuffer(),
+	    occlusion_query_enable: vk::FALSE,
+	    query_flags: vk::QueryControlFlags::empty(),
+	    // TODO: make this configurable (e.g. debug on/off)
+	    pipeline_statistics: vk::QueryPipelineStatisticFlags::empty(),
+	    
+	};
+	buf.record_internal(
+	    usage_flags | vk::CommandBufferUsageFlags::RENDER_PASS_CONTINUE,
+	    true,
+	    Some(&inheritance_info),
+	    write_fn,
+	)
+    }
+}
+
+impl Drop for SecondaryCommandBuffer {
+    fn drop(&mut self) {
+	// Drop has been implemented solely so that SecondaryCommandBuffers can be recorded as
+	// dependencies for CommandBuffers.
+    }
+}
 
 pub struct CommandBuffer {
     device: Rc<InnerDevice>,
     queue: Rc<Queue>,
+    inflight_fence: vk::Fence,
+    level: vk::CommandBufferLevel,
     buf: vk::CommandBuffer,
+    // This vector stores references to things that shouldn't be destroyed until
+    // the command buffer has been destroyed.
+    dependencies: Vec<Rc<dyn Drop>>,
 }
 
 impl CommandBuffer {
     pub fn new(
 	device: &Device,
-	level: vk::CommandBufferLevel,
 	queue: Rc<Queue>,
     ) -> anyhow::Result<Self> {
-	CommandBuffer::from_inner_device(device.inner.clone(), level, queue)
+	CommandBuffer::from_inner_device(device.inner.clone(), vk::CommandBufferLevel::PRIMARY, queue)
     }
 
     fn from_inner_device(
@@ -40,23 +105,73 @@ impl CommandBuffer {
             level,
         };
 
+	let fence_create_info = vk::FenceCreateInfo{
+            s_type: vk::StructureType::FENCE_CREATE_INFO,
+            p_next: ptr::null(),
+            flags: vk::FenceCreateFlags::SIGNALED,
+	};
+	let inflight_fence = unsafe {
+	    device.device
+		.create_fence(&fence_create_info, None)?
+	};
+
         let command_buffer = unsafe {
-            device.device
-                .allocate_command_buffers(&command_buffer_allocate_info)?
+            match device.device
+                .allocate_command_buffers(&command_buffer_allocate_info) {
+		    Ok(buf) => buf,
+		    Err(e) => {
+			device.device.destroy_fence(inflight_fence, None);
+			return Err(e.into());
+		    },
+		}
         }[0];
 
 	Ok(Self{
 	    device,
-	    buf: command_buffer,
 	    queue,
+	    inflight_fence,
+	    level,
+	    buf: command_buffer,
+	    dependencies: Vec::new(),
 	})
     }
 
-    pub fn record(&self, usage_flags: vk::CommandBufferUsageFlags) -> anyhow::Result<BufferWriter> {
+    pub fn wait_for_pending(&self) -> anyhow::Result<()> {
+        let wait_fences = [self.inflight_fence];
+        unsafe {
+            self.device.device
+                .wait_for_fences(&wait_fences, true, std::u64::MAX)?;
+        }
+	Ok(())
+    }
+    pub fn record<T, R>(
+	&mut self,
+	usage_flags: vk::CommandBufferUsageFlags,
+	write_fn: T,
+    ) -> anyhow::Result<R>
+    where
+        T: FnMut(&mut BufferWriter) -> anyhow::Result<R>
+    {
+	self.record_internal(usage_flags, false, None, write_fn)
+    }
+
+    fn record_internal<T, R>(
+	&mut self,
+	usage_flags: vk::CommandBufferUsageFlags,
+	in_render_pass: bool,
+	inheritance_info: Option<&vk::CommandBufferInheritanceInfo>,
+	mut write_fn: T,
+    ) -> anyhow::Result<R>
+    where
+        T: FnMut(&mut BufferWriter) -> anyhow::Result<R>
+    {
         let command_buffer_begin_info = vk::CommandBufferBeginInfo{
             s_type: vk::StructureType::COMMAND_BUFFER_BEGIN_INFO,
             p_next: ptr::null(),
-            p_inheritance_info: ptr::null(),
+            p_inheritance_info: match inheritance_info {
+		Some(p_info) => p_info,
+		None => ptr::null(),
+	    },
             flags: usage_flags,
         };
 
@@ -65,23 +180,37 @@ impl CommandBuffer {
                 .begin_command_buffer(self.buf, &command_buffer_begin_info)?;
         }
 
-        Ok(BufferWriter{
-	    device: self.device.clone(),
-            command_buffer: self,
-        })
+	Ok({
+	    let mut writer = BufferWriter{
+		device: self.device.clone(),
+		command_buffer: self.buf,
+		in_render_pass,
+		dependencies: Vec::new(),
+            };
+	    let result = write_fn(&mut writer)?;
+	    for dep in writer.dependencies.iter() {
+		self.dependencies.push(Rc::clone(dep));
+	    }
+	    result
+	})
     }
 
     pub fn submit_synced(
 	&self,
-	wait_stage: vk::PipelineStageFlags,
-	image_available_semaphore: vk::Semaphore,
-	render_finished_semaphore: vk::Semaphore,
-	inflight_fence: vk::Fence,
+	wait: &[(vk::PipelineStageFlags, vk::Semaphore)],
+	signal_semaphores: &[vk::Semaphore],
     ) -> anyhow::Result<()> {
-	let wait_semaphores = [image_available_semaphore];
-	let signal_semaphores = [render_finished_semaphore];
-	let wait_stages = [wait_stage];
-	let wait_fences = [inflight_fence];
+	if self.level == vk::CommandBufferLevel::SECONDARY {
+	    panic!("Tried to manually submit a secondary command buffer!");
+	}
+
+	let mut wait_stages = Vec::new();
+	let mut wait_semaphores = Vec::new();
+	for (stage, sem) in wait {
+	    wait_stages.push(*stage);
+	    wait_semaphores.push(*sem);
+	}
+	let wait_fences = [self.inflight_fence];
 
         let submit_infos = [vk::SubmitInfo{
             s_type: vk::StructureType::SUBMIT_INFO,
@@ -102,36 +231,34 @@ impl CommandBuffer {
                 .queue_submit(
                     self.queue.get(),
                     &submit_infos,
-                    inflight_fence,
+                    self.inflight_fence,
                 )?;
         }
 	Ok(())
     }
 
-    pub fn submit_unsynced(
+    #[allow(unused)]
+    pub fn reset(&mut self) -> anyhow::Result<()> {
+	self.wait_for_pending()?;
+	unsafe {
+	    self.device.device.reset_command_buffer(self.buf, vk::CommandBufferResetFlags::empty())?;
+	}
+	self.dependencies.clear();
+	Ok(())
+    }
+
+    pub fn submit_and_wait(
         &self,
     ) -> anyhow::Result<()> {
-        let buffers_to_submit = [self.buf];
+	if self.level == vk::CommandBufferLevel::SECONDARY {
+	    panic!("Tried to manually submit a secondary command buffer!");
+	}
 
-        let submit_infos = [vk::SubmitInfo{
-            s_type: vk::StructureType::SUBMIT_INFO,
-            p_next: ptr::null(),
-            wait_semaphore_count: 0,
-            p_wait_semaphores: ptr::null(),
-            p_wait_dst_stage_mask: ptr::null(),
-            command_buffer_count: 1,
-            p_command_buffers: buffers_to_submit.as_ptr(),
-            signal_semaphore_count: 0,
-            p_signal_semaphores: ptr::null(),
-        }];
-
-        unsafe {
-            self.device.device
-                .queue_submit(self.queue.get(), &submit_infos, vk::Fence::null())?;
-	    // TODO: do I actually want to do this wait here?
-            self.device.device
-                .queue_wait_idle(self.queue.get())?;
-        }
+	self.submit_synced(
+	    &[],
+	    &[],
+	)?;
+	self.wait_for_pending()?;
 
         Ok(())
     }
@@ -140,10 +267,11 @@ impl CommandBuffer {
     pub fn run_oneshot<T>(
 	device: &Device,
 	queue: Rc<Queue>,
+	wait_stage: vk::PipelineStageFlags,
 	cmd_fn: T,
     ) -> anyhow::Result<()>
     where
-        T: FnMut(&BufferWriter) -> anyhow::Result<()>
+        T: FnMut(&mut BufferWriter) -> anyhow::Result<()>
     {
 	CommandBuffer::run_oneshot_internal(device.inner.clone(), queue, cmd_fn)
     }
@@ -151,21 +279,18 @@ impl CommandBuffer {
     pub (in super) fn run_oneshot_internal<T>(
 	device: Rc<InnerDevice>,
 	queue: Rc<Queue>,
-	mut cmd_fn: T,
+	cmd_fn: T,
     ) -> anyhow::Result<()>
     where
-        T: FnMut(&BufferWriter) -> anyhow::Result<()>
+        T: FnMut(&mut BufferWriter) -> anyhow::Result<()>
     {
-        let cmd_buf = CommandBuffer::from_inner_device(
+        let mut cmd_buf = CommandBuffer::from_inner_device(
 	    device,
 	    vk::CommandBufferLevel::PRIMARY,
 	    queue,
 	)?;
-	{
-	    let writer = cmd_buf.record(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT)?;
-            cmd_fn(&writer)?;
-	}
-        cmd_buf.submit_unsynced()?;
+	cmd_buf.record(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT, cmd_fn)?;
+        cmd_buf.submit_and_wait()?;
         Ok(())
     }
 }
@@ -174,25 +299,65 @@ impl Drop for CommandBuffer {
     fn drop(&mut self) {
 	let buffers = [self.buf];
 	unsafe {
+	    let wait_fences = [self.inflight_fence];
+            match self.device.device
+                .wait_for_fences(&wait_fences, true, std::u64::MAX) {
+		    Ok(_) => (),
+		    Err(e) => println!("Failed to wait for buffer to be in Pending state: {}", e),
+		};
+	    self.device.device.destroy_fence(self.inflight_fence, None);
 	    self.device.device.free_command_buffers(self.queue.command_pool, &buffers);
 	}
     }
 }
 
-pub struct BufferWriter<'a> {
+pub struct BufferWriter {
     device: Rc<InnerDevice>,
-    command_buffer: &'a CommandBuffer,
+    command_buffer: vk::CommandBuffer,
+    in_render_pass: bool,
+    dependencies: Vec<Rc<dyn Drop>>,
 }
 
-impl<'a> BufferWriter<'a> {
-    pub fn begin_render_pass(
-	&self,
+impl BufferWriter {
+    pub fn join_render_pass<T, R>(&mut self, mut write_fn: T) -> anyhow::Result<R>
+    where
+        T: FnMut(&mut RenderPassWriter) -> anyhow::Result<R>
+    {
+	if !self.in_render_pass {
+	    panic!("join_render_pass() called on a BufferWriter that is not already in a render pass!");
+	}
+
+	let mut writer = RenderPassWriter{
+	    device: self.device.clone(),
+	    command_buffer: self.command_buffer,
+	    auto_end: false,
+	    allow_subpass_increment: false,
+	    dependencies: Vec::new(),
+	};
+	let result = write_fn(&mut writer)?;
+	for dep in writer.dependencies.iter() {
+	    self.dependencies.push(Rc::clone(dep));
+	}
+	Ok(result)
+    }
+
+    pub fn begin_render_pass<T, R>(
+	&mut self,
 	presenter: &Presenter,
 	render_pass: &RenderPass,
 	clear_values: &[vk::ClearValue],
 	attachment_set: &AttachmentSet,
-	framebuffer_index: usize,
-    ) -> RenderPassWriter {
+	swapchain_image_index: usize,
+	first_subpass_uses_secondaries: bool,
+	mut write_fn: T,
+    ) -> anyhow::Result<R>
+    where
+        T: FnMut(&mut RenderPassWriter) -> anyhow::Result<R>
+    {
+	if self.in_render_pass {
+	    panic!("begin_render_pass() called on a BufferWriter that is already in a render pass!");
+	}
+
 	let render_area = vk::Rect2D{
 	    offset: vk::Offset2D{
 		x: 0,
@@ -203,7 +368,7 @@ impl<'a> BufferWriter<'a> {
 
 	let vk_attachments = {
 	    let mut vk_attachments = vec![];
-	    vk_attachments.push(presenter.get_framebuffer_image_view(framebuffer_index));
+	    vk_attachments.push(presenter.get_swapchain_image_view(swapchain_image_index));
 	    vk_attachments.extend(attachment_set.get_image_views());
 	    vk_attachments
 	};
@@ -219,7 +384,7 @@ impl<'a> BufferWriter<'a> {
 	    s_type: vk::StructureType::RENDER_PASS_BEGIN_INFO,
 	    p_next: (&attachment_info as *const _) as *const c_void,
 	    render_pass: render_pass.render_pass,
-	    framebuffer: presenter.get_framebuffer(framebuffer_index),
+	    framebuffer: presenter.get_framebuffer(),
 	    render_area,
 	    clear_value_count: clear_values.len() as u32,
 	    p_clear_values: clear_values.as_ptr(),
@@ -227,20 +392,32 @@ impl<'a> BufferWriter<'a> {
 
 	unsafe {
 	    self.device.device.cmd_begin_render_pass(
-		self.command_buffer.buf,
+		self.command_buffer,
 		&render_pass_begin_info,
-		vk::SubpassContents::INLINE,
+		if first_subpass_uses_secondaries {
+		    vk::SubpassContents::SECONDARY_COMMAND_BUFFERS
+		} else {
+		    vk::SubpassContents::INLINE
+		},
 	    );
 	}
 
-	RenderPassWriter{
+	let mut writer = RenderPassWriter{
 	    device: self.device.clone(),
 	    command_buffer: self.command_buffer,
+	    auto_end: true,
+	    allow_subpass_increment: true,
+	    dependencies: Vec::new(),
+	};
+	let result = write_fn(&mut writer)?;
+	for dep in writer.dependencies.iter() {
+	    self.dependencies.push(Rc::clone(dep));
 	}
+	Ok(result)
     }
 
     pub fn pipeline_barrier(
-	&self,
+	&mut self,
 	src_stage_mask: vk::PipelineStageFlags,
 	dst_stage_mask: vk::PipelineStageFlags,
 	deps: vk::DependencyFlags,
@@ -250,7 +427,7 @@ impl<'a> BufferWriter<'a> {
     ) {
 	unsafe {
 	    self.device.device.cmd_pipeline_barrier(
-		self.command_buffer.buf,
+		self.command_buffer,
 		src_stage_mask,
 		dst_stage_mask,
 		deps,
@@ -261,28 +438,30 @@ impl<'a> BufferWriter<'a> {
 	}
     }
 
-    pub fn copy_buffer<S: HasBuffer, D: HasBuffer>(
-	&self,
-        src_buffer: &S,
-        dst_buffer: &D,
+    pub fn copy_buffer(
+	&mut self,
+        src_buffer: Rc<Buffer>,
+        dst_buffer: Rc<Buffer>,
 	copy_regions: &[vk::BufferCopy],
     ) {
 	unsafe {
 	    let src_buf = src_buffer.get_buffer();
 	    let dst_buf = dst_buffer.get_buffer();
 	    self.device.device.cmd_copy_buffer(
-		self.command_buffer.buf,
+		self.command_buffer,
 		src_buf,
 		dst_buf,
 		&copy_regions,
 	    );
 	}
+	self.dependencies.push(src_buffer);
+	self.dependencies.push(dst_buffer);
     }
 
     pub fn copy_buffer_to_image(
-	&self,
-	src_buffer: &UploadSourceBuffer,
-	image: &Image,
+	&mut self,
+	src_buffer: Rc<UploadSourceBuffer>,
+	image: Rc<Image>,
     ) {
         let buffer_image_regions = [vk::BufferImageCopy{
             image_subresource: vk::ImageSubresourceLayers{
@@ -300,27 +479,58 @@ impl<'a> BufferWriter<'a> {
 
 	unsafe {
             self.device.device.cmd_copy_buffer_to_image(
-		self.command_buffer.buf,
+		self.command_buffer,
 		src_buffer.get_buffer(),
 		image.img,
 		vk::ImageLayout::TRANSFER_DST_OPTIMAL,
 		&buffer_image_regions,
             );
 	}
+	self.dependencies.push(src_buffer);
+	self.dependencies.push(image);
     }
 
+    pub (in super) unsafe fn copy_buffer_to_image_no_deps(
+	&mut self,
+	src_buffer: &UploadSourceBuffer,
+	image: &Image,
+    ) {
+        let buffer_image_regions = [vk::BufferImageCopy{
+            image_subresource: vk::ImageSubresourceLayers{
+                aspect_mask: vk::ImageAspectFlags::COLOR,
+                mip_level: 0,
+                base_array_layer: 0,
+                layer_count: 1,
+            },
+            image_extent: image.extent,
+            buffer_offset: 0,
+            buffer_image_height: 0,
+            buffer_row_length: 0,
+            image_offset: vk::Offset3D{ x: 0, y: 0, z: 0 },
+        }];
+
+        self.device.device.cmd_copy_buffer_to_image(
+	    self.command_buffer,
+	    src_buffer.get_buffer(),
+	    image.img,
+	    vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+	    &buffer_image_regions,
+        );
+    }
+
+    #[allow(unused)]
     pub fn blit_image(
-	&self,
-	img_src: &Image,
+	&mut self,
+	img_src: Rc<Image>,
 	layout_src: vk::ImageLayout,
-	img_dst: &Image,
+	img_dst: Rc<Image>,
 	layout_dst: vk::ImageLayout,
 	regions: &[vk::ImageBlit],
 	filter: vk::Filter,
     ) {
 	unsafe {
             self.device.device.cmd_blit_image(
-		self.command_buffer.buf,
+		self.command_buffer,
 		img_src.img,
 		layout_src,
 		img_dst.img,
@@ -329,75 +539,111 @@ impl<'a> BufferWriter<'a> {
 		filter,
             );
 	}
+	self.dependencies.push(img_src);
+	self.dependencies.push(img_dst);
+    }
+
+    // Dependencies are not recorded.  Use this only in cases where you have no choice!
+    pub (in super) unsafe fn blit_image_no_deps(
+	&mut self,
+	img_src: &Image,
+	layout_src: vk::ImageLayout,
+	img_dst: &Image,
+	layout_dst: vk::ImageLayout,
+	regions: &[vk::ImageBlit],
+	filter: vk::Filter,
+    ) {
+        self.device.device.cmd_blit_image(
+	    self.command_buffer,
+	    img_src.img,
+	    layout_src,
+	    img_dst.img,
+	    layout_dst,
+	    regions,
+	    filter,
+        );
     }
 }
 
-impl<'a> Drop for BufferWriter<'a> {
+impl Drop for BufferWriter {
     fn drop(&mut self) {
 	unsafe {
-	    if let Err(e) = self.device.device.end_command_buffer(self.command_buffer.buf) {
+	    if let Err(e) = self.device.device.end_command_buffer(self.command_buffer) {
 		println!("Failed to end command buffer: {:?}", e);
 	    }
 	}
     }
 }
 
-pub struct RenderPassWriter<'a> {
+pub struct RenderPassWriter {
     device: Rc<InnerDevice>,
-    command_buffer: &'a CommandBuffer,
+    command_buffer: vk::CommandBuffer,
+    auto_end: bool,
+    allow_subpass_increment: bool,
+    dependencies: Vec<Rc<dyn Drop>>,
 }
 
-impl<'a> RenderPassWriter<'a> {
-    pub fn bind_pipeline<V: Vertex>(
-	&self,
-	pipeline: Rc<RefCell<Pipeline<V>>>,
+impl RenderPassWriter {
+    pub fn bind_pipeline<V: Vertex + 'static>(
+	&mut self,
+	pipeline: Rc<Pipeline<V>>,
     ) {
 	unsafe {
 	    self.device.device.cmd_bind_pipeline(
-		self.command_buffer.buf,
+		self.command_buffer,
 		vk::PipelineBindPoint::GRAPHICS,
-		pipeline.borrow().pipeline,
+		pipeline.get_vk(),
 	    );
 	}
+	self.dependencies.push(pipeline);
     }
 
     pub fn bind_descriptor_sets(
-	&self,
+	&mut self,
 	pipeline_layout: vk::PipelineLayout,
-	descriptor_sets: &[vk::DescriptorSet],
+	descriptor_sets: &[Rc<DescriptorSet>],
     ) {
+	let mut vk_sets = Vec::new();
+	for set in descriptor_sets {
+	    vk_sets.push(set.inner);
+	    // This turbofish horseshit is needed because otherwise, the compiler will
+	    // infer the type parameter to be `dyn Drop`, and Rc::clone() will barf because
+	    // its parameter is Rc<DescriptorSet> rather than Rc<dyn Drop>.
+	    self.dependencies.push(Rc::<DescriptorSet>::clone(set));
+	}
 	unsafe {
 	    self.device.device.cmd_bind_descriptor_sets(
-		self.command_buffer.buf,
+		self.command_buffer,
 		vk::PipelineBindPoint::GRAPHICS,
 		pipeline_layout,
 		0,
-		&descriptor_sets,
+		&vk_sets,
 		&[],
 	    );
 	}
     }
 
-    pub fn draw<T>(
-	&self,
-	vertex_buffer: &VertexBuffer<T>,
+    pub fn draw<T: 'static>(
+	&mut self,
+	vertex_buffer: Rc<VertexBuffer<T>>,
     ) {
 	let vertex_buffers = [vertex_buffer.get_buffer()];
 	let offsets = [0_u64];
 
 	unsafe {
 	    self.device.device.cmd_bind_vertex_buffers(
-		self.command_buffer.buf,
+		self.command_buffer,
 		0,
 		&vertex_buffers,
 		&offsets,
 	    );
 	    self.device.device.cmd_draw(
-		self.command_buffer.buf,
+		self.command_buffer,
 		vertex_buffer.len() as u32,
 		1, 0, 0,
 	    );
 	}
+	self.dependencies.push(vertex_buffer);
     }
 
     pub fn draw_no_vbo(
@@ -407,7 +653,7 @@ impl<'a> RenderPassWriter<'a> {
     ) {
 	unsafe {
 	    self.device.device.cmd_draw(
-		self.command_buffer.buf,
+		self.command_buffer,
 		num_vertices as u32,
 		num_instances as u32,
 		0, 0,
@@ -415,50 +661,74 @@ impl<'a> RenderPassWriter<'a> {
 	}
     }
 
-    pub fn draw_indexed<T>(
-	&self,
-	vertex_buffer: &VertexBuffer<T>,
-	index_buffer: &IndexBuffer,
+    pub fn draw_indexed<T: 'static>(
+	&mut self,
+	vertex_buffer: Rc<VertexBuffer<T>>,
+	index_buffer: Rc<IndexBuffer>,
     ) {
 	let vertex_buffers = [vertex_buffer.get_buffer()];
 	let offsets = [0_u64];
 
 	unsafe {
 	    self.device.device.cmd_bind_vertex_buffers(
-		self.command_buffer.buf,
+		self.command_buffer,
 		0,
 		&vertex_buffers,
 		&offsets,
 	    );
 	    self.device.device.cmd_bind_index_buffer(
-		self.command_buffer.buf,
+		self.command_buffer,
 		index_buffer.get_buffer(),
 		0,
 		vk::IndexType::UINT32,
 	    );
 	    self.device.device.cmd_draw_indexed(
-		self.command_buffer.buf,
+		self.command_buffer,
 		index_buffer.len() as u32,
 		1, 0, 0, 0,
 	    );
 	}
+	self.dependencies.push(vertex_buffer);
+	self.dependencies.push(index_buffer);
     }
 
-    pub fn next_subpass(&self) {
+    pub fn next_subpass(&self, uses_secondaries: bool) {
+	if !self.allow_subpass_increment {
+	    panic!("VkCmdNextSubpass is not allowed on a secondary command buffer!");
+	}
 	unsafe {
 	    self.device.device.cmd_next_subpass(
-		self.command_buffer.buf,
-		vk::SubpassContents::INLINE,
+		self.command_buffer,
+		if uses_secondaries {
+		    vk::SubpassContents::SECONDARY_COMMAND_BUFFERS
+		} else {
+		    vk::SubpassContents::INLINE
+		},
 	    );
 	}
     }
 
+    pub fn execute_commands(&mut self, secondaries: &[Rc<SecondaryCommandBuffer>]) {
+	let mut vk_secondaries = Vec::new();
+	for secondary in secondaries {
+	    vk_secondaries.push(secondary.buf.borrow().buf);
+	    self.dependencies.push(Rc::<SecondaryCommandBuffer>::clone(secondary));
+	}
+	unsafe {
+	    self.device.device.cmd_execute_commands(
+		self.command_buffer,
+		&vk_secondaries,
+	    );
+	}
+    }
 }
 
-impl<'a> Drop for RenderPassWriter<'a> {
+impl Drop for RenderPassWriter {
     fn drop(&mut self) {
-	unsafe {
-	    self.device.device.cmd_end_render_pass(self.command_buffer.buf);
+	if self.auto_end {
+	    unsafe {
+		self.device.device.cmd_end_render_pass(self.command_buffer);
+	    }
 	}
     }
 }

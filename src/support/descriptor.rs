@@ -18,7 +18,7 @@ pub struct WriteDescriptorSet {
     descriptor_type: vk::DescriptorType,
     buffer_info: Pin<Box<Vec<vk::DescriptorBufferInfo>>>,
     image_info: Pin<Box<Vec<vk::DescriptorImageInfo>>>,
-    dst_set: vk::DescriptorSet,
+    dst_set: Rc<DescriptorSet>,
     dst_binding: u32,
 }
 
@@ -26,7 +26,7 @@ impl WriteDescriptorSet {
     fn for_buffers(
 	descriptor_type: vk::DescriptorType,
 	buffer_info: Vec<vk::DescriptorBufferInfo>,
-	dst_set: vk::DescriptorSet,
+	dst_set: Rc<DescriptorSet>,
 	dst_binding: u32,
     ) -> Self {
 	Self{
@@ -41,7 +41,7 @@ impl WriteDescriptorSet {
     fn for_images(
 	descriptor_type: vk::DescriptorType,
 	image_info: Vec<vk::DescriptorImageInfo>,
-	dst_set: vk::DescriptorSet,
+	dst_set: Rc<DescriptorSet>,
 	dst_binding: u32,
     ) -> Self {
 	Self{
@@ -57,7 +57,7 @@ impl WriteDescriptorSet {
 	let mut set = vk::WriteDescriptorSet{
 	    s_type: vk::StructureType::WRITE_DESCRIPTOR_SET,
 	    p_next: ptr::null(),
-	    dst_set: self.dst_set,
+	    dst_set: self.dst_set.inner,
 	    dst_binding: self.dst_binding,
 	    dst_array_element: 0,
 	    descriptor_count: 0,
@@ -85,7 +85,7 @@ impl WriteDescriptorSet {
 }
 
 pub trait DescriptorRef {
-    fn get_write(&self, dst_set: vk::DescriptorSet, dst_binding: u32) -> WriteDescriptorSet;
+    fn get_write(&self, dst_set: Rc<DescriptorSet>, dst_binding: u32) -> WriteDescriptorSet;
     fn get_type(&self) -> vk::DescriptorType;
 }
 
@@ -108,7 +108,7 @@ where <T as AsStd140>::Std140: Sized
 impl<T: AsStd140> DescriptorRef for UniformBufferRef<T>
 where <T as AsStd140>::Std140: Sized
 {
-    fn get_write(&self, dst_set: vk::DescriptorSet, dst_binding: u32) -> WriteDescriptorSet {
+    fn get_write(&self, dst_set: Rc<DescriptorSet>, dst_binding: u32) -> WriteDescriptorSet {
 	let mut uniform_buffer_info = vec![];
 	for buf in self.uniform_buffers.iter() {
 	    uniform_buffer_info.push(vk::DescriptorBufferInfo{
@@ -135,6 +135,7 @@ pub struct TextureRef {
 }
 
 impl TextureRef {
+    #[allow(unused)]
     pub fn new(textures: Vec<Rc<Texture>>) -> Self {
 	Self{
 	    textures,
@@ -143,7 +144,7 @@ impl TextureRef {
 }
 
 impl DescriptorRef for TextureRef {
-    fn get_write(&self, dst_set: vk::DescriptorSet, dst_binding: u32) -> WriteDescriptorSet {
+    fn get_write(&self, dst_set: Rc<DescriptorSet>, dst_binding: u32) -> WriteDescriptorSet {
 	let mut texture_info = vec![];
 	for tex in self.textures.iter() {
 	    texture_info.push(vk::DescriptorImageInfo{
@@ -171,6 +172,7 @@ pub struct CombinedRef {
 }
 
 impl CombinedRef {
+    #[allow(unused)]
     pub fn new(sampler: Rc<Sampler>, textures: Vec<Rc<Texture>>) -> Self {
 	Self{
 	    samplers: vec![sampler],
@@ -191,7 +193,7 @@ impl CombinedRef {
 }
 
 impl DescriptorRef for CombinedRef {
-    fn get_write(&self, dst_set: vk::DescriptorSet, dst_binding: u32) -> WriteDescriptorSet {
+    fn get_write(&self, dst_set: Rc<DescriptorSet>, dst_binding: u32) -> WriteDescriptorSet {
 	let mut texture_info = vec![];
 	for (i, tex) in self.textures.iter().enumerate() {
 	    texture_info.push(vk::DescriptorImageInfo{
@@ -232,7 +234,7 @@ impl InputAttachmentRef {
 }
 
 impl DescriptorRef for InputAttachmentRef {
-    fn get_write(&self, dst_set: vk::DescriptorSet, dst_binding: u32) -> WriteDescriptorSet {
+    fn get_write(&self, dst_set: Rc<DescriptorSet>, dst_binding: u32) -> WriteDescriptorSet {
 	let texture_info = vec![vk::DescriptorImageInfo{
 	    sampler: vk::Sampler::null(),
 	    image_view: self.texture.image_view.view,
@@ -298,52 +300,12 @@ impl Drop for DescriptorSetLayout {
     }
 }
 
-pub struct UniformLayout {
-    binding_sets: Vec<Rc<DescriptorSetLayout>>,
-}
-
-impl UniformLayout {
-    pub fn contains(&self, other: &Self) -> bool {
-	if self.binding_sets.len() < other.binding_sets.len() {
-	    return false;
-	}
-
-	for set_idx in 0..self.binding_sets.len() {
-	    if set_idx >= other.binding_sets.len() {
-		break;
-	    }
-
-	    let self_set = &self.binding_sets[set_idx].bindings;
-	    let other_set = &other.binding_sets[set_idx].bindings;
-	    if self_set.len() < other_set.len() {
-		return false;
-	    }
-
-	    for binding_idx in 0..self_set.len() {
-		if binding_idx >= other_set.len() {
-		    break;
-		}
-
-		let self_binding = self_set[binding_idx];
-		let other_binding = other_set[binding_idx];
-		if self_binding.descriptor_type != other_binding.descriptor_type {
-		    return false;
-		}
-		if self_binding.descriptor_count < other_binding.descriptor_count {
-		    return false;
-		}
-	    }
-	}
-
-	return true;
-    }
-}
-
 pub struct DescriptorPool {
     device: Rc<InnerDevice>,
     pools: Vec<vk::DescriptorPool>,
     pool_sizes: HashMap<vk::DescriptorType, u32>,
     max_sets: u32,
+    sets: Vec<Rc<DescriptorSet>>,
 }
 
 impl DescriptorPool {
@@ -357,16 +319,24 @@ impl DescriptorPool {
 	    pools: Vec::new(),
 	    pool_sizes,
 	    max_sets,
+	    sets: Vec::new(),
 	};
 	this.grow()?;
 	Ok(this)
     }
 
-    // TODO: consider making this error out if any descriptor sets are still
-    //       "at large" (e.g. store sets in objects that implement Drop and keep count).
     #[allow(unused)]
     pub fn reset(&mut self) -> anyhow::Result<()> {
 	panic!("This shouldn't be happening yet!");
+	let mut i = 0;
+	for set in &self.sets {
+	    if Rc::strong_count(set) > 1 {
+		return Err(
+		    anyhow!("Descriptor set {} has external references, but we are resetting its pool!", i)
+		);
+	    }
+	    i += 1;
+	}
 	unsafe {
 	    if self.pools.len() > 1 {
 		for pool in self.pools.drain(1..) {
@@ -408,7 +378,7 @@ impl DescriptorPool {
 	count: usize,
 	layout: &DescriptorSetLayout,
 	items: &Vec<Box<dyn DescriptorRef>>,
-    ) -> anyhow::Result<Vec<vk::DescriptorSet>> {
+    ) -> anyhow::Result<Vec<Rc<DescriptorSet>>> {
 	if items.len() != layout.bindings.len() {
 	    return Err(anyhow!(
 		"Provided {} items for a layout that takes {} items",
@@ -423,7 +393,7 @@ impl DescriptorPool {
 	    // These have to stick around until the call to update_descriptor_sets() returns.
 	    let mut writers = vec![];
 	    for (binding, item) in items.iter().enumerate() {
-		writers.push(item.get_write(*set, binding as u32));
+		writers.push(item.get_write(Rc::<DescriptorSet>::clone(set), binding as u32));
 		writes.push(writers.last().unwrap().get());
 	    }
 	    if DEBUG_DESCRIPTOR_SETS {
@@ -441,6 +411,7 @@ impl DescriptorPool {
 	    unsafe {
 		self.device.device.update_descriptor_sets(&writes, &[]);
 	    }
+	    self.sets.push(Rc::clone(set));
 	}
 	Ok(sets)
     }
@@ -449,7 +420,7 @@ impl DescriptorPool {
 	&mut self,
 	count: usize,
 	layout: &DescriptorSetLayout,
-    ) -> anyhow::Result<Vec<vk::DescriptorSet>> {
+    ) -> anyhow::Result<Vec<Rc<DescriptorSet>>> {
 	let mut layouts: Vec<vk::DescriptorSetLayout> = vec![];
         for _ in 0..count {
             layouts.push(layout.layout);
@@ -470,10 +441,18 @@ impl DescriptorPool {
 	layouts: &[vk::DescriptorSetLayout],
 	info: &vk::DescriptorSetAllocateInfo,
 	retry: bool,
-    ) -> anyhow::Result<Vec<vk::DescriptorSet>> {
+    ) -> anyhow::Result<Vec<Rc<DescriptorSet>>> {
 
         match unsafe { self.device.device.allocate_descriptor_sets(info) } {
-	    Ok(sets) => Ok(sets),
+	    Ok(vk_sets) => Ok({
+		let mut sets = Vec::new();
+		for set in vk_sets {
+		    sets.push(Rc::new(DescriptorSet{
+			inner: set,
+		    }));
+		}
+		sets
+	    }),
 	    Err(vk::Result::ERROR_FRAGMENTED_POOL) | Err(vk::Result::ERROR_OUT_OF_POOL_MEMORY) => {
 		if retry {
 		    self.grow()?;
@@ -489,10 +468,29 @@ impl DescriptorPool {
 
 impl Drop for DescriptorPool {
     fn drop(&mut self) {
+	let mut i = 0;
+	for set in &self.sets {
+	    if Rc::strong_count(set) > 1 {
+		println!("Descriptor set {} has external references, but we are destroying its pool!", i);
+	    }
+	    i += 1;
+	}
 	unsafe {
 	    for pool in self.pools.iter() {
 		self.device.device.destroy_descriptor_pool(*pool, None);
 	    }
 	}
+    }
+}
+
+#[derive(Debug)]
+pub struct DescriptorSet {
+    pub (in super) inner: vk::DescriptorSet,
+}
+
+impl Drop for DescriptorSet {
+    fn drop(&mut self) {
+	// Drop has been implemented solely so that DescriptorSets can be recorded as
+	// dependencies for CommandBuffers.
     }
 }

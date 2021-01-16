@@ -280,17 +280,163 @@ impl Image {
 	Ok(())
     }
 
-    pub fn copy_buffer(
-	&self,
-        buffer: &UploadSourceBuffer,
-    ) -> anyhow::Result<()> {
-	CommandBuffer::run_oneshot_internal(
-	    self.device.clone(),
+    pub fn generate_mipmaps(
+	&mut self,
+	mip_levels: u32,
+    ) -> anyhow::Result<()>{
+	use std::cmp::max;
+        super::command_buffer::CommandBuffer::run_oneshot_internal(
+	    Rc::clone(&self.device),
 	    self.device.get_default_transfer_queue(),
 	    |writer| {
+		let mut image_barrier = vk::ImageMemoryBarrier{
+                    s_type: vk::StructureType::IMAGE_MEMORY_BARRIER,
+                    p_next: ptr::null(),
+                    src_access_mask: vk::AccessFlags::empty(),
+                    dst_access_mask: vk::AccessFlags::empty(),
+                    old_layout: vk::ImageLayout::UNDEFINED,
+                    new_layout: vk::ImageLayout::UNDEFINED,
+                    src_queue_family_index: vk::QUEUE_FAMILY_IGNORED,
+                    dst_queue_family_index: vk::QUEUE_FAMILY_IGNORED,
+                    image: self.img,
+                    subresource_range: vk::ImageSubresourceRange{
+			aspect_mask: vk::ImageAspectFlags::COLOR,
+			base_mip_level: 0,
+			level_count: 1,
+			base_array_layer: 0,
+			layer_count: 1,
+                    },
+		};
+
+		let mut mip_width = self.extent.width as i32;
+		let mut mip_height = self.extent.height as i32;
+
+		for i in 1..mip_levels {
+                    image_barrier.subresource_range.base_mip_level = i - 1;
+                    image_barrier.old_layout = vk::ImageLayout::TRANSFER_DST_OPTIMAL;
+                    image_barrier.new_layout = vk::ImageLayout::TRANSFER_SRC_OPTIMAL;
+                    image_barrier.src_access_mask = vk::AccessFlags::TRANSFER_WRITE;
+                    image_barrier.dst_access_mask = vk::AccessFlags::TRANSFER_READ;
+
+                    writer.pipeline_barrier(
+			vk::PipelineStageFlags::TRANSFER,
+			vk::PipelineStageFlags::TRANSFER,
+			vk::DependencyFlags::empty(),
+			&[],
+			&[],
+			&[image_barrier.clone()],
+                    );
+
+                    let blits = [vk::ImageBlit{
+			src_subresource: vk::ImageSubresourceLayers{
+                            aspect_mask: vk::ImageAspectFlags::COLOR,
+                            mip_level: i - 1,
+                            base_array_layer: 0,
+                            layer_count: 1,
+			},
+			src_offsets: [
+                            vk::Offset3D{ x: 0, y: 0, z: 0 },
+                            vk::Offset3D{
+				x: mip_width,
+				y: mip_height,
+				z: 1,
+                            },
+			],
+			dst_subresource: vk::ImageSubresourceLayers{
+                            aspect_mask: vk::ImageAspectFlags::COLOR,
+                            mip_level: i,
+                            base_array_layer: 0,
+                            layer_count: 1,
+			},
+			dst_offsets: [
+                            vk::Offset3D{ x: 0, y: 0, z: 0 },
+                            vk::Offset3D{
+				x: max(mip_width / 2, 1),
+				y: max(mip_height / 2, 1),
+				z: 1,
+                            },
+			],
+                    }];
+
+		    unsafe {
+			writer.blit_image_no_deps(
+			    self,
+			    vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
+			    self,
+			    vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+			    &blits,
+			    vk::Filter::LINEAR,
+			);
+		    }
+
+                    image_barrier.old_layout = vk::ImageLayout::TRANSFER_SRC_OPTIMAL;
+                    image_barrier.new_layout = vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL;
+                    image_barrier.src_access_mask = vk::AccessFlags::TRANSFER_READ;
+                    image_barrier.dst_access_mask = vk::AccessFlags::SHADER_READ;
+
+		    writer.pipeline_barrier(
+			vk::PipelineStageFlags::TRANSFER,
+			vk::PipelineStageFlags::FRAGMENT_SHADER,
+			vk::DependencyFlags::empty(),
+			&[],
+			&[],
+			&[image_barrier.clone()],
+		    );
+
+                    mip_width = max(mip_width / 2, 1);
+                    mip_height = max(mip_height / 2, 1);
+		}
+
+		image_barrier.subresource_range.base_mip_level = mip_levels - 1;
+		image_barrier.old_layout = vk::ImageLayout::TRANSFER_DST_OPTIMAL;
+		image_barrier.new_layout = vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL;
+		image_barrier.src_access_mask = vk::AccessFlags::TRANSFER_WRITE;
+		image_barrier.dst_access_mask = vk::AccessFlags::SHADER_READ;
+
+		writer.pipeline_barrier(
+		    vk::PipelineStageFlags::TRANSFER,
+		    vk::PipelineStageFlags::FRAGMENT_SHADER,
+		    vk::DependencyFlags::empty(),
+		    &[],
+		    &[],
+		    &[image_barrier.clone()],
+		);
+		Ok(())
+            })?;
+
+	self.layout = vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL;
+
+	Ok(())
+    }
+
+    #[allow(unused)]
+    pub fn copy_buffer(
+        buffer: Rc<UploadSourceBuffer>,
+	dst_img: Rc<Image>,
+    ) -> anyhow::Result<()> {
+	CommandBuffer::run_oneshot_internal(
+	    Rc::clone(&dst_img.device),
+	    dst_img.device.get_default_transfer_queue(),
+	    |writer| {
 		writer.copy_buffer_to_image(
+		    Rc::clone(&buffer),
+		    Rc::clone(&dst_img),
+		);
+		Ok(())
+            })
+    }
+
+    pub (in super) unsafe fn copy_buffer_no_deps(
+        buffer: &UploadSourceBuffer,
+	dst_img: &Image,
+    ) -> anyhow::Result<()> {
+	CommandBuffer::run_oneshot_internal(
+	    Rc::clone(&dst_img.device),
+	    dst_img.device.get_default_transfer_queue(),
+	    |writer| {
+		writer.copy_buffer_to_image_no_deps(
 		    buffer,
-		    self,
+		    dst_img,
 		);
 		Ok(())
             })
@@ -361,6 +507,7 @@ impl ImageView {
 
 impl Drop for ImageView {
     fn drop(&mut self) {
+	//println!("Dropping image view {:?}", self.view);
 	unsafe {
             self.device.device.destroy_image_view(self.view, None);
 	}

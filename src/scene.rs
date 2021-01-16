@@ -1,14 +1,9 @@
-use ash::vk;
-use anyhow::anyhow;
-
 use std::rc::Rc;
 
-use super::support::{Device, Queue};
-use super::support::command_buffer::{CommandBuffer, RenderPassWriter};
-use super::support::renderer::Presenter;
+use super::support::command_buffer::RenderPassWriter;
 
 pub trait Renderable {
-    fn write_draw_command(&self, idx: usize, writer: &RenderPassWriter) -> anyhow::Result<()>;
+    fn write_draw_command(&self, idx: usize, writer: &mut RenderPassWriter) -> anyhow::Result<()>;
     fn sync_uniform_buffers(&self, idx: usize) -> anyhow::Result<()>;
 }
 
@@ -26,10 +21,12 @@ impl Scene {
     }
 
     // This should mainly be useful for handling pipeline updates.
+    #[allow(unused)]
     pub fn clear_renderables(&mut self) {
 	self.renderables.clear();
     }
 
+    #[allow(unused)]
     pub fn set_renderables(
 	&mut self,
 	renderables: Vec<Rc<dyn Renderable>>,
@@ -38,9 +35,9 @@ impl Scene {
     }
 
     pub fn write_command_buffer(
-	&mut self,
+	&self,
 	framebuffer_index: usize,
-	writer: &RenderPassWriter,
+	writer: &mut RenderPassWriter,
     ) -> anyhow::Result<()> {
 	for renderable in self.renderables.iter() {
 	    renderable.write_draw_command(framebuffer_index, writer)?;

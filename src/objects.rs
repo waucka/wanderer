@@ -3,7 +3,6 @@ use anyhow::anyhow;
 use cgmath::Matrix4;
 use glsl_layout::AsStd140;
 
-use std::cell::RefCell;
 use std::collections::HashMap;
 use std::ptr;
 use std::rc::Rc;
@@ -13,6 +12,7 @@ use super::support::buffer::{VertexBuffer, IndexBuffer, UniformBufferSet};
 use super::support::command_buffer::RenderPassWriter;
 use super::support::descriptor::{
     DescriptorPool,
+    DescriptorSet,
     DescriptorSetLayout,
     CombinedRef,
     DescriptorRef,
@@ -35,9 +35,9 @@ pub struct StaticGeometryTypeUBO {
 }
 
 pub struct StaticGeometrySet<V: Vertex> {
-    global_descriptor_sets: Vec<vk::DescriptorSet>,
+    global_descriptor_sets: Vec<Rc<DescriptorSet>>,
     type_descriptor_set_layout: DescriptorSetLayout,
-    type_descriptor_sets: Vec<vk::DescriptorSet>,
+    type_descriptor_sets: Vec<Rc<DescriptorSet>>,
     instance_descriptor_set_layout: DescriptorSetLayout,
     vertex_buffer: Rc<VertexBuffer<V>>,
     index_buffer: Option<Rc<IndexBuffer>>,
@@ -45,6 +45,13 @@ pub struct StaticGeometrySet<V: Vertex> {
     type_pool: DescriptorPool,
     instance_pool: DescriptorPool,
     objects: Vec<StaticGeometry>,
+}
+
+impl<V: Vertex> Drop for StaticGeometrySet<V> {
+    fn drop(&mut self) {
+	self.global_descriptor_sets.clear();
+	self.type_descriptor_sets.clear();
+    }
 }
 
 pub type StaticGeometryId = usize;
@@ -57,18 +64,16 @@ impl<V: Vertex> StaticGeometrySet<V> {
 
     pub fn new(
 	device: &Device,
-	global_descriptor_sets: Vec<vk::DescriptorSet>,
+	global_descriptor_sets: Vec<Rc<DescriptorSet>>,
 	vertex_buffer: Rc<VertexBuffer<V>>,
 	index_buffer: Option<Rc<IndexBuffer>>,
 	materials: &Vec<Rc<Material>>,
-	num_frames: usize,
     ) -> anyhow::Result<Self> {
 	let uniform_buffer_set = UniformBufferSet::new(
 	    device,
 	    StaticGeometryTypeUBO{
 		tint: [1.0, 1.0, 1.0, 1.0].into(),
 	    },
-	    num_frames,
 	)?;
 
 	let type_descriptor_set_layout = DescriptorSetLayout::new(
@@ -166,7 +171,8 @@ impl<V: Vertex> StaticGeometrySet<V> {
 	};
 
 	let mut type_descriptor_sets = vec![];
-	for frame_idx in 0..num_frames {
+	for frame_idx in 0..uniform_buffer_set.len() {
+	    // TODO: handle this better (e.g. something like UniformBufferSet)
 	    let mut items: Vec<Box<dyn DescriptorRef>> = vec![
 		Box::new(UniformBufferRef::new(vec![uniform_buffer_set.get_buffer(frame_idx)?])),
 	    ];
@@ -191,7 +197,7 @@ impl<V: Vertex> StaticGeometrySet<V> {
 		&type_descriptor_set_layout,
 		&items,
 	    )?;
-	    type_descriptor_sets.push(sets[0]);
+	    type_descriptor_sets.push(Rc::clone(&sets[0]));
 	}
 
 	let instance_pool = {
@@ -226,17 +232,15 @@ impl<V: Vertex> StaticGeometrySet<V> {
 	device: &Device,
 	model_matrix: Matrix4<f32>,
     ) -> anyhow::Result<StaticGeometryId> {
-	let num_frames = self.uniform_buffer_set.len();
 	let uniform_buffer_set = UniformBufferSet::new(
 	    device,
 	    StaticGeometryInstanceUBO{
 		model: model_matrix.into(),
 	    },
-	    num_frames,
 	)?;
 
 	let mut instance_descriptor_sets = vec![];
-	for frame_idx in 0..num_frames {
+	for frame_idx in 0..uniform_buffer_set.len() {
 	    let items: Vec<Box<dyn DescriptorRef>> = vec![
 		Box::new(UniformBufferRef::new(vec![uniform_buffer_set.get_buffer(frame_idx)?])),
 	    ];
@@ -249,7 +253,7 @@ impl<V: Vertex> StaticGeometrySet<V> {
 		&self.instance_descriptor_set_layout,
 		&items,
 	    )?;
-	    instance_descriptor_sets.push(sets[0]);
+	    instance_descriptor_sets.push(Rc::clone(&sets[0]));
 	}
 
 	let object_id = self.objects.len();
@@ -260,10 +264,12 @@ impl<V: Vertex> StaticGeometrySet<V> {
 	Ok(object_id)
     }
 
+    #[allow(unused)]
     pub fn clear(&mut self) {
 	self.objects.clear();
     }
 
+    #[allow(unused)]
     pub fn get_mut(&mut self, object_id: StaticGeometryId) -> anyhow::Result<&mut StaticGeometry> {
 	if object_id >= self.objects.len() {
 	    Err(anyhow!("Tried to modify invalid static geometry object {}", object_id))
@@ -282,13 +288,13 @@ impl<V: Vertex> StaticGeometrySet<V> {
 }
 
 pub struct StaticGeometrySetRenderer<V: Vertex> {
-    pipeline: Rc<RefCell<Pipeline<V>>>,
+    pipeline: Rc<Pipeline<V>>,
     static_geometry_set: StaticGeometrySet<V>,
 }
 
 impl<V: Vertex> StaticGeometrySetRenderer<V> {
     pub fn new(
-	pipeline: Rc<RefCell<Pipeline<V>>>,
+	pipeline: Rc<Pipeline<V>>,
 	static_geometry_set: StaticGeometrySet<V>,
     ) -> Self {
 	Self{
@@ -298,14 +304,14 @@ impl<V: Vertex> StaticGeometrySetRenderer<V> {
     }
 }
 
-impl<V: Vertex> Renderable for StaticGeometrySetRenderer<V> {
-    fn write_draw_command(&self, idx: usize, writer: &RenderPassWriter) -> anyhow::Result<()> {
-	writer.bind_pipeline(self.pipeline.clone());
+impl<V: Vertex + 'static> Renderable for StaticGeometrySetRenderer<V> {
+    fn write_draw_command(&self, idx: usize, writer: &mut RenderPassWriter) -> anyhow::Result<()> {
+	writer.bind_pipeline(Rc::clone(&self.pipeline));
 	for object in self.static_geometry_set.objects.iter() {
 	    let descriptor_sets = [
-		self.static_geometry_set.global_descriptor_sets[idx],
-		self.static_geometry_set.type_descriptor_sets[idx],
-		object.instance_descriptor_sets[idx],
+		Rc::clone(&self.static_geometry_set.global_descriptor_sets[idx]),
+		Rc::clone(&self.static_geometry_set.type_descriptor_sets[idx]),
+		Rc::clone(&object.instance_descriptor_sets[idx]),
 	    ];
 	    if DEBUG_DESCRIPTOR_SETS {
 		println!("Binding descriptor sets...");
@@ -313,14 +319,14 @@ impl<V: Vertex> Renderable for StaticGeometrySetRenderer<V> {
 		println!("\tSet 1: {:?}", descriptor_sets[1]);
 		println!("\tSet 2: {:?}", descriptor_sets[2]);
 	    }
-	    writer.bind_descriptor_sets(self.pipeline.borrow().get_layout(), &descriptor_sets);
+	    writer.bind_descriptor_sets(self.pipeline.get_layout(), &descriptor_sets);
 	    match &self.static_geometry_set.index_buffer {
 		Some(idx_buf) => writer.draw_indexed(
-		    &self.static_geometry_set.vertex_buffer,
-		    idx_buf,
+		    Rc::clone(&self.static_geometry_set.vertex_buffer),
+		    Rc::clone(idx_buf),
 		),
 		None => writer.draw(
-		    &self.static_geometry_set.vertex_buffer,
+		    Rc::clone(&self.static_geometry_set.vertex_buffer),
 		),
 	    };
 	}
@@ -342,21 +348,27 @@ pub struct StaticGeometryInstanceUBO {
 }
 
 pub struct StaticGeometry {
-    instance_descriptor_sets: Vec<vk::DescriptorSet>,
+    instance_descriptor_sets: Vec<Rc<DescriptorSet>>,
     uniform_buffer_set: UniformBufferSet<StaticGeometryInstanceUBO>,
+}
+
+impl Drop for StaticGeometry {
+    fn drop(&mut self) {
+	self.instance_descriptor_sets.clear();
+    }
 }
 
 //TODO: This should probably be moved to a new module called "postprocessing" or something.
 
 pub struct PostProcessingStep {
-    global_descriptor_sets: Vec<vk::DescriptorSet>,
-    pipeline: Rc<RefCell<Pipeline<NullVertex>>>,
+    global_descriptor_sets: Vec<Rc<DescriptorSet>>,
+    pipeline: Rc<Pipeline<NullVertex>>,
 }
 
 impl PostProcessingStep {
     pub fn new(
-	global_descriptor_sets: Vec<vk::DescriptorSet>,
-	pipeline: Rc<RefCell<Pipeline<NullVertex>>>,
+	global_descriptor_sets: Vec<Rc<DescriptorSet>>,
+	pipeline: Rc<Pipeline<NullVertex>>,
     ) -> Self {
 	Self{
 	    global_descriptor_sets,
@@ -364,22 +376,22 @@ impl PostProcessingStep {
 	}
     }
 
-    pub fn replace_descriptor_sets(&mut self, global_descriptor_sets: Vec<vk::DescriptorSet>) {
+    pub fn replace_descriptor_sets(&mut self, global_descriptor_sets: Vec<Rc<DescriptorSet>>) {
 	self.global_descriptor_sets = global_descriptor_sets;
     }
 }
 
 impl Renderable for PostProcessingStep {
-    fn write_draw_command(&self, idx: usize, writer: &RenderPassWriter) -> anyhow::Result<()> {
+    fn write_draw_command(&self, idx: usize, writer: &mut RenderPassWriter) -> anyhow::Result<()> {
 	writer.bind_pipeline(self.pipeline.clone());
 	let descriptor_sets = [
-	    self.global_descriptor_sets[idx],
+	    Rc::clone(&self.global_descriptor_sets[idx]),
 	];
 	if DEBUG_DESCRIPTOR_SETS {
 	    println!("Binding descriptor sets...");
 	    println!("\tSet 0: {:?}", descriptor_sets[0]);
 	}
-	writer.bind_descriptor_sets(self.pipeline.borrow().get_layout(), &descriptor_sets);
+	writer.bind_descriptor_sets(self.pipeline.get_layout(), &descriptor_sets);
 	writer.draw_no_vbo(3, 1);
 	Ok(())
     }

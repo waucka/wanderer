@@ -15,6 +15,8 @@ use super::utils::vk_to_string;
 use super::debug::VALIDATION;
 use super::debug;
 
+pub const MAX_FRAMES_IN_FLIGHT: usize = 2;
+
 pub mod utils;
 
 macro_rules! impl_defaulted_setter {
@@ -506,7 +508,7 @@ impl DeviceBuilder {
 }
 
 pub struct Device {
-    pub inner: Rc<InnerDevice>,
+    inner: Rc<InnerDevice>,
 }
 
 impl Device {
@@ -534,6 +536,7 @@ impl Device {
 	}
     }
 
+    #[allow(unused)]
     pub fn get_max_usable_sample_count(
 	&self,
     ) -> vk::SampleCountFlags {
@@ -614,12 +617,13 @@ struct QueueSet {
     default_transfer_queue_idx: usize,
 }
 
-pub struct InnerDevice {
+struct InnerDevice {
     window: winit::window::Window,
     _entry: ash::Entry,
     instance: ash::Instance,
     surface_loader: ash::extensions::khr::Surface,
     surface: vk::SurfaceKHR,
+    swapchain_loader: ash::extensions::khr::Swapchain,
     debug_utils_loader: ash::extensions::ext::DebugUtils,
     debug_messenger: vk::DebugUtilsMessengerEXT,
     validation_enabled: bool,
@@ -675,6 +679,7 @@ impl InnerDevice {
 	    &queue_infos,
 	    builder.get_extensions(),
 	);
+	let swapchain_loader = ash::extensions::khr::Swapchain::new(&instance, &device);
 
         let this = Rc::new(Self{
             window,
@@ -682,6 +687,7 @@ impl InnerDevice {
             instance,
             surface_loader,
             surface,
+	    swapchain_loader,
             debug_utils_loader,
             debug_messenger,
 	    validation_enabled: *builder.validation_enabled.get_value(),
@@ -734,21 +740,78 @@ impl InnerDevice {
 	Ok(this)
     }
 
-    pub (in super) fn get_default_graphics_queue(&self) -> Rc<Queue> {
+    fn get_default_graphics_queue(&self) -> Rc<Queue> {
 	let queue_set = self.queue_set.borrow();
 	queue_set.queues[queue_set.default_graphics_queue_idx].clone()
     }
 
     #[allow(unused)]
-    pub (in super) fn get_default_present_queue(&self) -> Rc<Queue> {
+    fn get_default_present_queue(&self) -> Rc<Queue> {
 	let queue_set = self.queue_set.borrow();
 	queue_set.queues[queue_set.default_present_queue_idx].clone()
     }
 
     #[allow(unused)]
-    pub (in super) fn get_default_transfer_queue(&self) -> Rc<Queue> {
+    fn get_default_transfer_queue(&self) -> Rc<Queue> {
 	let queue_set = self.queue_set.borrow();
 	queue_set.queues[queue_set.default_transfer_queue_idx].clone()
+    }
+
+    fn query_swapchain_support(&self) -> SwapChainSupport {
+	query_swapchain_support(
+	    self.physical_device,
+	    &self.surface_loader,
+	    self.surface,
+	)
+    }
+
+    fn create_swapchain(&self, swapchain_create_info: &vk::SwapchainCreateInfoKHR) -> anyhow::Result<vk::SwapchainKHR> {
+	Ok(unsafe {
+            self.swapchain_loader
+		.create_swapchain(swapchain_create_info, None)?
+	})
+    }
+
+    fn get_swapchain_images(&self, swapchain: vk::SwapchainKHR) -> anyhow::Result<Vec<vk::Image>> {
+	Ok(unsafe {
+            self.swapchain_loader
+		.get_swapchain_images(swapchain)?
+	})
+    }
+
+    fn destroy_swapchain(&self, swapchain: vk::SwapchainKHR) {
+	unsafe {
+            self.swapchain_loader.destroy_swapchain(swapchain, None);
+	}
+    }
+
+    fn acquire_next_image(
+	&self,
+	swapchain: vk::SwapchainKHR,
+	timeout: u64,
+	semaphore: vk::Semaphore,
+	fence: vk::Fence
+    ) -> ash::prelude::VkResult<(u32, bool)> {
+	unsafe {
+	    self.swapchain_loader
+		.acquire_next_image(
+                    swapchain,
+                    timeout,
+                    semaphore,
+                    fence,
+		)
+	}
+    }
+
+    fn queue_present(
+	&self,
+	queue: Rc<Queue>,
+	present_info: &vk::PresentInfoKHR
+    ) -> ash::prelude::VkResult<bool> {
+	unsafe {
+            self.swapchain_loader
+                .queue_present(queue.get(), present_info)
+        }
     }
 }
 
