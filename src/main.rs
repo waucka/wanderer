@@ -20,8 +20,8 @@ mod models;
 mod ui_app;
 
 use window::VulkanApp;
-use models::{/*Model,*/ ModelNonIndexed, Vertex};
-use support::{Device, DeviceBuilder};
+use models::{/*Model,*/ ModelNonIndexed};
+use support::{Device, DeviceBuilder, PerFrameSet, FrameId};
 use support::command_buffer::{CommandBuffer, SecondaryCommandBuffer};
 use support::descriptor::{
     DescriptorPool,
@@ -33,21 +33,20 @@ use support::descriptor::{
 };
 use support::renderer::{
     Presenter,
-    Pipeline,
-    PipelineParameters,
     RenderPass,
     RenderPassBuilder,
     AttachmentDescription,
     AttachmentSet,
     AttachmentRef,
     Subpass,
+    SubpassRef,
 };
-use support::shader::{VertexShader, FragmentShader};
 use support::texture::{Material};
-use support::buffer::{VertexBuffer/*, IndexBuffer*/, UniformBufferSet};
-use objects::{StaticGeometrySet, StaticGeometrySetRenderer, PostProcessingStep};
+use support::buffer::{VertexBuffer/*, IndexBuffer*/, UniformBuffer};
+use objects::{StaticGeometryRenderer, PostProcessingStep};
 use scene::{Scene, Renderable};
-use utils::{NullVertex, Matrix4f, Vector4f};
+use ui_app::{UIApp, UIAppRenderer};
+use utils::{Matrix4f, Vector4f};
 
 const WINDOW_TITLE: &'static str = "Wanderer";
 const WINDOW_WIDTH: usize = 1024;
@@ -86,7 +85,7 @@ struct HdrControlUniform {
 }
 
 struct SecondaryBufferSet {
-    scene: Rc<SecondaryCommandBuffer>,
+    scene: Vec<Rc<SecondaryCommandBuffer>>,
     hdr: Rc<SecondaryCommandBuffer>,
     ui: Rc<SecondaryCommandBuffer>,
 }
@@ -94,11 +93,114 @@ struct SecondaryBufferSet {
 impl Clone for SecondaryBufferSet {
     fn clone(&self) -> Self {
 	Self{
-	    scene: Rc::clone(&self.scene),
+	    scene: self.scene.clone(),
 	    hdr: Rc::clone(&self.hdr),
 	    ui: Rc::clone(&self.ui),
 	}
     }
+}
+
+
+pub struct UIManager {
+    renderer: UIAppRenderer,
+    app: Option<Rc<dyn UIApp>>,
+    app_context: ui_app::AppContext,
+    egui_ctx: egui::CtxRef,
+}
+
+impl UIManager {
+    pub fn new(
+	device: &Device,
+	window_width: usize,
+	window_height: usize,
+	render_pass: &RenderPass,
+	subpass: u32,
+    ) -> anyhow::Result<Self> {
+	Ok(Self{
+	    renderer: UIAppRenderer::new(
+		device,
+		window_width,
+		window_height,
+		render_pass,
+		subpass,
+	    )?,
+	    app: None,
+	    app_context: ui_app::AppContext::new(),
+	    egui_ctx: egui::CtxRef::default(),
+	})
+    }
+
+    pub fn update_app_data(
+	&mut self,
+	device: &Device,
+	frame: FrameId,
+	render_pass: &RenderPass,
+	subpass: u32,
+	raw_input: egui::RawInput,
+    ) -> anyhow::Result<()> {
+	match &self.app {
+	    Some(app) => {
+		self.egui_ctx.begin_frame(raw_input);
+		app.update(&self.egui_ctx, &mut self.app_context);
+		let (_egui_output, paint_commands) = self.egui_ctx.end_frame();
+		let egui_texture = self.egui_ctx.texture();
+		let paint_jobs = self.egui_ctx.tessellate(paint_commands);
+		self.renderer.update_app_data(
+		    device,
+		    frame,
+		    &paint_jobs,
+		    &egui_texture,
+		    render_pass,
+		    subpass,
+		)?;
+		Ok(())
+	    },
+	    None => {
+		self.renderer.remove_app_data(frame);
+		Ok(())
+	    },
+	}
+    }
+
+    fn get_command_buffer(
+	&self,
+	frame: FrameId,
+	render_pass: &RenderPass,
+	subpass: u32,
+    ) -> anyhow::Result<Rc<SecondaryCommandBuffer>> {
+	self.renderer.get_command_buffer(
+	    frame,
+	    render_pass,
+	    subpass,
+	)
+    }
+
+    fn sync_uniform_buffers(&self, frame: FrameId) -> anyhow::Result<()> {
+	self.renderer.sync_uniform_buffers(frame)
+    }
+
+    fn update_pipeline_viewport(
+	&self,
+	viewport_width: usize,
+	viewport_height: usize,
+	render_pass: &RenderPass,
+    ) -> anyhow::Result<()> {
+	self.renderer.update_pipeline_viewport(
+	    viewport_width,
+	    viewport_height,
+	    render_pass,
+	)
+    }
+}
+
+struct GlobalFrameData {
+    descriptor_set: Rc<DescriptorSet>,
+    uniform_buffer: Rc<UniformBuffer<UniformBufferObject>>,
+}
+
+struct HdrFrameData {
+    descriptor_set: Rc<DescriptorSet>,
+    uniform_buffer: Rc<UniformBuffer<HdrControlUniform>>,
 }
 
 struct VulkanApp21 {
@@ -109,29 +211,26 @@ struct VulkanApp21 {
     global_pool: DescriptorPool,
     #[allow(unused)]
     global_descriptor_set_layout: DescriptorSetLayout,
-    global_uniform_buffer_set: UniformBufferSet<UniformBufferObject>,
-    static_geometry_pipelines: Vec<Rc<Pipeline<Vertex>>>,
+    global_frame_data: PerFrameSet<GlobalFrameData>,
+    global_uniform: UniformBufferObject,
     #[allow(unused)]
-    viking_room_set: Rc<StaticGeometrySetRenderer<Vertex>>,
-    #[allow(unused)]
-    global_descriptor_sets: Vec<Rc<DescriptorSet>>,
     scene: Scene,
     attachment_set: AttachmentSet,
     render_target_color: AttachmentRef,
-    postprocessing_pipelines: Vec<Rc<Pipeline<NullVertex>>>,
     hdr: PostProcessingStep,
-    hdr_uniform_buffer_set: UniformBufferSet<HdrControlUniform>,
+    hdr_frame_data: PerFrameSet<HdrFrameData>,
     hdr_descriptor_set_layout: DescriptorSetLayout,
-    secondary_buffers: Vec<SecondaryBufferSet>,
+    ui_manager: UIManager,
     materials: Vec<Rc<Material>>,
     _model: ModelNonIndexed,
     msaa_samples: vk::SampleCountFlags,
 
-    egui_ctx: egui::CtxRef,
-    ui_app_context: ui_app::AppContext,
+    rendering_subpass: SubpassRef,
+    postprocessing_subpass: SubpassRef,
+    ui_subpass: SubpassRef,
+
     uniform_twiddler_app: ui_app::UniformTwiddler,
 
-    current_frame: usize,
     is_framebuffer_resized: bool,
     yaw_speed: f32,
     pitch_speed: f32,
@@ -144,7 +243,6 @@ struct VulkanApp21 {
 
 impl Drop for VulkanApp21 {
     fn drop(&mut self) {
-	self.static_geometry_pipelines.clear();
 	self.materials.clear();
     }
 }
@@ -161,9 +259,8 @@ impl VulkanApp21 {
                 .with_validation(true)
 		.with_default_extensions()
         )?;
+
 	// Begin egui setup
-	let egui_ctx = egui::CtxRef::default();
-	let ui_app_context = ui_app::AppContext::new();
 	let uniform_twiddler_app = Default::default();
 	// End egui setup
 	// TODO: figure out how to support MSAA for this engine or use FXAA or something
@@ -263,16 +360,6 @@ impl VulkanApp21 {
 	dbg!(max_frames_in_flight);
         device.check_mipmap_support(vk::Format::R8G8B8A8_UNORM)?;
 
-        let vert_shader: VertexShader<Vertex> =
-            VertexShader::from_spv_file(
-                &device,
-                Path::new("./lighting.vert.spv"),
-            )?;
-        let frag_shader = FragmentShader::from_spv_file(
-            &device,
-            Path::new("./lighting.frag.spv"),
-        )?;
-
         let (width, height) = presenter.get_dimensions();
 
 	let mut global_pool = {
@@ -308,61 +395,65 @@ impl VulkanApp21 {
 	    }],
 	)?;
 
-	let global_uniform_buffer_set = UniformBufferSet::new(
-	    &device,
-	    UniformBufferObject{
-                view: {
-		    let view_matrix = Matrix4::look_at_dir(
-			Point3::new(0.0, -2.0, 0.0),
-			Vector3::new(0.0, 1.0, 0.0).normalize(),
-			Vector3::new(0.0, 0.0, 1.0),
-                    );
-		    view_matrix.into()
-		},
-                proj: {
-                    let mut proj = cgmath::perspective(
-                        Deg(45.0),
-                        width as f32
-                            / height as f32,
-                        0.1,
-                        100.0,
-                    );
-                    proj[1][1] = proj[1][1] * -1.0;
-		    proj.into()
-                },
-		view_pos: [0.0, -2.0, 0.0, 1.0].into(),
-		view_dir: [0.0, 1.0, 0.0, 1.0].into(),
-		light_positions: [
-		    [0.0, 0.0, 10.0, 1.0].into(),
-		    [0.0, 0.0, 0.0, 1.0].into(),
-		    [0.0, 0.0, 0.0, 1.0].into(),
-		    [0.0, 0.0, 0.0, 1.0].into(),
-		],
-		light_colors: [
-		    [500.0, 500.0, 500.0, 500.0].into(),
-		    [0.0, 0.0, 0.0, 0.0].into(),
-		    [0.0, 0.0, 0.0, 0.0].into(),
-		    [0.0, 0.0, 0.0, 0.0].into(),
-		],
-		use_parallax: true.into(),
-		use_ao: true.into(),
+	let global_uniform = UniformBufferObject{
+            view: {
+		let view_matrix = Matrix4::look_at_dir(
+		    Point3::new(0.0, -2.0, 0.0),
+		    Vector3::new(0.0, 1.0, 0.0).normalize(),
+		    Vector3::new(0.0, 0.0, 1.0),
+                );
+		view_matrix.into()
+	    },
+            proj: {
+                let mut proj = cgmath::perspective(
+                    Deg(45.0),
+                    width as f32
+                        / height as f32,
+                    0.1,
+                    100.0,
+                );
+                proj[1][1] = proj[1][1] * -1.0;
+		proj.into()
+            },
+	    view_pos: [0.0, -2.0, 0.0, 1.0].into(),
+	    view_dir: [0.0, 1.0, 0.0, 1.0].into(),
+	    light_positions: [
+		[0.0, 0.0, 10.0, 1.0].into(),
+		[0.0, 0.0, 0.0, 1.0].into(),
+		[0.0, 0.0, 0.0, 1.0].into(),
+		[0.0, 0.0, 0.0, 1.0].into(),
+	    ],
+	    light_colors: [
+		[500.0, 500.0, 500.0, 500.0].into(),
+		[0.0, 0.0, 0.0, 0.0].into(),
+		[0.0, 0.0, 0.0, 0.0].into(),
+		[0.0, 0.0, 0.0, 0.0].into(),
+	    ],
+	    use_parallax: true.into(),
+	    use_ao: true.into(),
+	};
+
+	let global_frame_data = PerFrameSet::new(
+	    |_| {
+		let uniform_buffer = Rc::new(UniformBuffer::new(
+		    &device,
+		    Some(&global_uniform),
+		)?);
+		let items: Vec<Box<dyn DescriptorRef>> = vec![
+		    Box::new(UniformBufferRef::new(vec![Rc::clone(&uniform_buffer)])),
+		];
+
+		let sets = global_pool.create_descriptor_sets(
+		    1,
+		    &global_descriptor_set_layout,
+		    &items,
+		)?;
+		Ok(GlobalFrameData{
+		    descriptor_set: Rc::clone(&sets[0]),
+		    uniform_buffer 
+		})
 	    },
 	)?;
-
-	let mut global_descriptor_sets = vec![];
-	for frame_idx in 0..max_frames_in_flight {
-	    let items: Vec<Box<dyn DescriptorRef>> = vec![
-		Box::new(UniformBufferRef::new(vec![
-		    global_uniform_buffer_set.get_buffer(frame_idx)?,
-		])),
-	    ];
-	    let sets = global_pool.create_descriptor_sets(
-		1,
-		&global_descriptor_set_layout,
-		&items,
-	    )?;
-	    global_descriptor_sets.push(Rc::clone(&sets[0]));
-	}
 
 	let material = Material::from_files(
 	    &device,
@@ -399,16 +490,25 @@ impl VulkanApp21 {
         let vertex_buffer = VertexBuffer::new(&device, model.get_vertices())?;
         //let index_buffer = IndexBuffer::new(&device, model.get_indices())?;
 
-
-	let mut viking_room_geometry_set = StaticGeometrySet::new(
+	let mut viking_room_geometry = StaticGeometryRenderer::new(
 	    &device,
-	    global_descriptor_sets.clone(),
+	    &global_descriptor_set_layout,
+	    global_frame_data.extract(
+		|frame_data| {
+		    Ok(Rc::clone(&frame_data.descriptor_set))
+		}
+	    )?,
 	    Rc::new(vertex_buffer),
 	    None,
 	    //Some(Rc::new(index_buffer)),
 	    &materials,
+	    WINDOW_WIDTH,
+	    WINDOW_HEIGHT,
+	    &render_pass,
+	    rendering_subpass.into(),
+	    msaa_samples,
 	)?;
-	viking_room_geometry_set.add(
+	viking_room_geometry.add(
 	    &device,
 	    Matrix4::from_axis_angle(Vector3::new(1.0, 0.0, 0.0), Deg(90.0)) * Matrix4::from_scale(1.0),
 	)?;
@@ -418,37 +518,8 @@ impl VulkanApp21 {
 	    Matrix4::from_translation(Vector3::new(0.0, 0.0, 5.0)) * Matrix4::from_scale(0.5),
 	)?;*/
 
-	let set_layouts = [
-	    &global_descriptor_set_layout,
-	    viking_room_geometry_set.get_type_layout(),
-	    viking_room_geometry_set.get_instance_layout(),
-	];
-
-	let static_geometry_pipeline = Rc::new(Pipeline::new(
-	    &device,
-	    WINDOW_WIDTH,
-	    WINDOW_HEIGHT,
-	    &render_pass,
-	    vert_shader,
-	    frag_shader,
-	    &set_layouts,
-	    PipelineParameters::new()
-		.with_msaa_samples(msaa_samples)
-		.with_cull_mode(vk::CullModeFlags::NONE)
-		.with_front_face(vk::FrontFace::COUNTER_CLOCKWISE)
-		.with_depth_test()
-		.with_depth_write()
-		.with_depth_compare_op(vk::CompareOp::LESS)
-		.with_subpass(0),
-	)?);
-
-	let viking_room_set = Rc::new(StaticGeometrySetRenderer::new(
-	    static_geometry_pipeline.clone(),
-	    viking_room_geometry_set,
-	));
-
 	let renderables: Vec<Rc<dyn Renderable>> = vec![
-	    viking_room_set.clone(),
+	    Rc::new(viking_room_geometry),
 	];
 
 	let scene = Scene::new(
@@ -463,15 +534,6 @@ impl VulkanApp21 {
 	)?;
 
 	// Begin HDR setup
-        let vert_shader_hdr: VertexShader<NullVertex> =
-            VertexShader::from_spv_file(
-                &device,
-                Path::new("./hdr.vert.spv"),
-            )?;
-        let frag_shader_hdr = FragmentShader::from_spv_file(
-            &device,
-            Path::new("./hdr.frag.spv"),
-        )?;
 
 	let hdr_descriptor_set_layout = DescriptorSetLayout::new(
 	    &device,
@@ -493,57 +555,62 @@ impl VulkanApp21 {
 	    ],
 	)?;
 
-	let hdr_uniform_buffer_set = UniformBufferSet::new(
-	    &device,
-	    HdrControlUniform{
-		exposure: 1.0,
-		gamma: 2.2,
-		algo: 2,
+	let hdr_control_uniform = HdrControlUniform{
+	    exposure: 1.0,
+	    gamma: 2.2,
+	    algo: 2,
+	};
+
+	let hdr_frame_data = PerFrameSet::new(
+	    |_| {
+		let uniform_buffer = Rc::new(UniformBuffer::new(
+		    &device,
+		    Some(&hdr_control_uniform),
+		)?);
+
+		let items: Vec<Box<dyn DescriptorRef>> = vec![
+		    Box::new(InputAttachmentRef::new(
+			attachment_set.get(&render_target_color),
+			vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
+		    )),
+		    Box::new(UniformBufferRef::new(vec![Rc::clone(&uniform_buffer)])),
+		];
+		let sets = global_pool.create_descriptor_sets(
+		    1,
+		    &hdr_descriptor_set_layout,
+		    &items,
+		)?;
+
+		Ok(HdrFrameData{
+		    descriptor_set: Rc::clone(&sets[0]),
+		    uniform_buffer,
+		})
 	    },
 	)?;
 
-	let mut hdr_descriptor_sets = vec![];
-	for frame_idx in 0..max_frames_in_flight {
-	    let items: Vec<Box<dyn DescriptorRef>> = vec![
-		// Texture 0 is the texture we wrote in HDR format.
-		Box::new(InputAttachmentRef::new(
-		    attachment_set.get(&render_target_color),
-		    vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
-		)),
-		Box::new(UniformBufferRef::new(vec![
-		    hdr_uniform_buffer_set.get_buffer(frame_idx)?,
-		])),
-	    ];
-	    let sets = global_pool.create_descriptor_sets(
-		1,
-		&hdr_descriptor_set_layout,
-		&items,
-	    )?;
-	    hdr_descriptor_sets.push(Rc::clone(&sets[0]));
-	}
+	let hdr = PostProcessingStep::new(
+	    &device,
+	    &hdr_descriptor_set_layout,
+	    hdr_frame_data.extract(
+		|frame_data| {
+		    Ok(Rc::clone(&frame_data.descriptor_set))
+		}
+	    )?,
+	    WINDOW_WIDTH,
+	    WINDOW_HEIGHT,
+	    &render_pass,
+	    postprocessing_subpass.into(),
+	)?;
 
-	let set_layouts_hdr = [&hdr_descriptor_set_layout];
+	// End HDR setup
 
-	let hdr_resolve_pipeline = Rc::new(Pipeline::new(
+	let ui_manager = UIManager::new(
 	    &device,
 	    WINDOW_WIDTH,
 	    WINDOW_HEIGHT,
 	    &render_pass,
-	    vert_shader_hdr,
-	    frag_shader_hdr,
-	    &set_layouts_hdr,
-	    PipelineParameters::new()
-		.with_cull_mode(vk::CullModeFlags::FRONT)
-		.with_front_face(vk::FrontFace::COUNTER_CLOCKWISE)
-		.with_subpass(1),
-	)?);
-
-	let hdr = PostProcessingStep::new(
-	    hdr_descriptor_sets,
-	    hdr_resolve_pipeline.clone(),
-	);
-
-	// End HDR setup
+	    ui_subpass.into(),
+	)?;
 
         Ok({
 	    let mut this = VulkanApp21{
@@ -552,27 +619,25 @@ impl VulkanApp21 {
 		render_pass,
 		global_pool,
 		global_descriptor_set_layout,
-		global_uniform_buffer_set,
-		static_geometry_pipelines: vec![static_geometry_pipeline],
-		viking_room_set,
-		global_descriptor_sets,
+		global_frame_data,
+		global_uniform,
 		scene,
 		attachment_set,
 		render_target_color,
-		postprocessing_pipelines: vec![hdr_resolve_pipeline],
 		hdr,
-		hdr_uniform_buffer_set,
+		hdr_frame_data,
 		hdr_descriptor_set_layout,
-		secondary_buffers: Vec::new(),
+		ui_manager,
 		materials,
 		_model: model,
 		msaa_samples,
 
-		egui_ctx,
-		ui_app_context,
+		rendering_subpass,
+		postprocessing_subpass,
+		ui_subpass,
+
 		uniform_twiddler_app,
 
-		current_frame: 0,
 		is_framebuffer_resized: false,
 		yaw_speed: 0.0,
 		pitch_speed: 0.0,
@@ -588,70 +653,38 @@ impl VulkanApp21 {
     }
 
     fn rebuild_command_buffers(&mut self) -> anyhow::Result<()> {
-        let max_frames_in_flight = support::MAX_FRAMES_IN_FLIGHT;
-	self.secondary_buffers.clear();
-
-	for frame_idx in 0..max_frames_in_flight {
-	    let scene_buffer = SecondaryCommandBuffer::new(
-		&self.device,
-		self.device.get_default_graphics_queue(),
-	    )?;
-	    scene_buffer.record(
-		vk::CommandBufferUsageFlags::SIMULTANEOUS_USE,
-		&self.render_pass,
-		0,
-		|secondary_writer| {
-		    secondary_writer.join_render_pass(
-			|secondary_rp_writer| {
-			    self.scene.write_command_buffer(frame_idx, secondary_rp_writer)?;
-			    Ok(())
-			}
-		    )
-		},
-	    )?;
-	    let hdr_buffer = SecondaryCommandBuffer::new(
-		&self.device,
-		self.device.get_default_graphics_queue(),
-	    )?;
-	    hdr_buffer.record(
-		vk::CommandBufferUsageFlags::SIMULTANEOUS_USE,
-		&self.render_pass,
-		1,
-		|secondary_writer| {
-		    secondary_writer.join_render_pass(
-			|secondary_rp_writer| {
-			    self.hdr.write_draw_command(frame_idx, secondary_rp_writer)?;
-			    Ok(())
-			}
-		    )
-		}
-	    )?;
-	    let ui_buffer = SecondaryCommandBuffer::new(
-		&self.device,
-		self.device.get_default_graphics_queue(),
-	    )?;
-	    ui_buffer.record(
-		vk::CommandBufferUsageFlags::SIMULTANEOUS_USE,
-		&self.render_pass,
-		2,
-		|_secondary_writer| {
-		    Ok(())
-		}
-	    )?;
-	    self.secondary_buffers.push(SecondaryBufferSet{
-		scene: scene_buffer,
-		hdr: hdr_buffer,
-		ui: ui_buffer,
-	    });
-	}
+	self.scene.rebuild_command_buffers(
+	    &self.device,
+	    &self.render_pass,
+	    self.rendering_subpass.into(),
+	)?;
+	self.hdr.rebuild_command_buffers(
+	    &self.device,
+	    &self.render_pass,
+	    self.postprocessing_subpass.into(),
+	)?;
 	Ok(())
     }
 
-    fn get_secondary_buffers(&self) -> SecondaryBufferSet {
-	self.secondary_buffers[self.current_frame].clone()
+    fn get_secondary_buffers(
+	&self,
+	frame: FrameId,
+	render_pass: &RenderPass,
+	subpass: u32,
+    ) -> anyhow::Result<SecondaryBufferSet> {
+	Ok(SecondaryBufferSet {
+	    scene: self.scene.get_command_buffers(frame)?,
+	    hdr: self.hdr.get_command_buffer(frame)?,
+	    ui: self.ui_manager.get_command_buffer(
+		frame,
+		render_pass,
+		subpass,
+	    )?,
+	})
     }
 
-    fn update_uniform_buffer(&mut self, current_image: usize, delta_time: f32) {
+    fn update_uniform_buffer(&mut self, delta_time: f32) -> anyhow::Result<()> {
+	let frame = self.presenter.get_current_frame();
 	let pitch_transform = Matrix4::from_axis_angle(
             self.view_right.truncate(),
             Deg(self.pitch_speed * delta_time),
@@ -683,72 +716,78 @@ impl VulkanApp21 {
 	let view_dir = self.view_dir;
 	let view_up = self.view_up;
 	let view_right = self.view_right;
-        self.global_uniform_buffer_set.update_and_upload(
-	    current_image,
-	    |uniform_transform: &mut UniformBufferObject| -> anyhow::Result<()> {
-		uniform_transform.view_pos = {
-		    let mut view_pos: Vector4<f32> = uniform_transform.view_pos.into();
-                    view_pos += view_up * camera_speed.z * delta_time;
-		    view_pos += view_dir * camera_speed.y * delta_time;
-		    view_pos += view_right * -camera_speed.x * delta_time;
-		    view_pos.w = 1.0;
-		    view_pos.into()
-		};
 
-		uniform_transform.view = {
-		    let view_pos: Vector4<f32> = uniform_transform.view_pos.into();
-                    let view_matrix: Matrix4<f32> = Matrix4::look_at_dir(
-			Point3::new(
-                            view_pos.x,
-                            view_pos.y,
-                            view_pos.z,
-			),
-			view_dir.truncate(),
-			view_up.truncate(),
-                    );
-		    view_matrix.into()
-		};
-		Ok(())
-            }).unwrap();
+	let uniform_transform = &mut self.global_uniform;
+	uniform_transform.view_pos = {
+	    let mut view_pos: Vector4<f32> = uniform_transform.view_pos.into();
+            view_pos += view_up * camera_speed.z * delta_time;
+	    view_pos += view_dir * camera_speed.y * delta_time;
+	    view_pos += view_right * -camera_speed.x * delta_time;
+	    view_pos.w = 1.0;
+	    view_pos.into()
+	};
+
+	uniform_transform.view = {
+	    let view_pos: Vector4<f32> = uniform_transform.view_pos.into();
+            let view_matrix: Matrix4<f32> = Matrix4::look_at_dir(
+		Point3::new(
+                    view_pos.x,
+                    view_pos.y,
+                    view_pos.z,
+		),
+		view_dir.truncate(),
+		view_up.truncate(),
+            );
+	    view_matrix.into()
+	};
+
+	self.global_frame_data.get(frame).uniform_buffer.update(uniform_transform)?;
+	Ok(())
     }
 
     fn resize(&mut self, width: usize, height: usize) -> anyhow::Result<()> {
 	println!("Resizing...");
-	for pipeline in self.static_geometry_pipelines.iter() {
-	    pipeline.update_viewport(
-		width,
-		height,
-		&self.render_pass,
-	    )?;
-	}
-	for pipeline in self.postprocessing_pipelines.iter() {
-	    pipeline.update_viewport(
-		width,
-		height,
-		&self.render_pass,
-	    )?;
-	}
+	self.scene.update_pipeline_viewports(
+	    width,
+	    height,
+	    &self.render_pass,
+	)?;
+	self.hdr.update_pipeline_viewport(
+	    width,
+	    height,
+	    &self.render_pass,
+	)?;
+	self.ui_manager.update_pipeline_viewport(
+	    width,
+	    height,
+	    &self.render_pass,
+	)?;
+
 	self.attachment_set.resize(&self.render_pass, width, height, self.msaa_samples)?;
-	let mut hdr_descriptor_sets = vec![];
-	for frame_idx in 0..support::MAX_FRAMES_IN_FLIGHT {
-	    let items: Vec<Box<dyn DescriptorRef>> = vec![
-		// Texture 0 is the texture we wrote in HDR format.
-		Box::new(InputAttachmentRef::new(
-		    self.attachment_set.get(&self.render_target_color),
-		    vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
-		)),
-		Box::new(UniformBufferRef::new(vec![
-		    self.hdr_uniform_buffer_set.get_buffer(frame_idx)?,
-		])),
-	    ];
-	    let sets = self.global_pool.create_descriptor_sets(
-		1,
-		&self.hdr_descriptor_set_layout,
-		&items,
-	    )?;
-	    hdr_descriptor_sets.push(Rc::clone(&sets[0]));
-	}
-	self.hdr.replace_descriptor_sets(hdr_descriptor_sets);
+	let hdr = &mut self.hdr;
+	let global_pool = &mut self.global_pool;
+	let hdr_descriptor_set_layout = &self.hdr_descriptor_set_layout;
+	let render_target_color = &self.attachment_set.get(&self.render_target_color);
+	let hdr_frame_data = &self.hdr_frame_data;
+	hdr.replace_descriptor_sets(
+	    |frame, _| {
+		let items: Vec<Box<dyn DescriptorRef>> = vec![
+		    Box::new(InputAttachmentRef::new(
+			Rc::clone(render_target_color),
+			vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
+		    )),
+		    Box::new(UniformBufferRef::new(vec![
+			Rc::clone(&hdr_frame_data.get(frame).uniform_buffer),
+		    ])),
+		];
+		let sets = global_pool.create_descriptor_sets(
+		    1,
+		    hdr_descriptor_set_layout,
+		    &items,
+		)?;
+		Ok(Rc::clone(&sets[0]))
+	    }
+	)?;
 	// TODO: I don't like having this in here, but any resize operation requires
 	//       the command buffers to be re-created, right?
 	self.rebuild_command_buffers()?;
@@ -768,8 +807,6 @@ impl VulkanApp for VulkanApp21 {
 	}
 
 	let mut maybe_new_dimensions = None;
-	// We acquire the image before waiting because we need to acquire the image
-	// before building the Egui command buffer
         let image_index = self.presenter.acquire_next_image(
 	    &self.render_pass,
 	    &mut |width: usize, height: usize| -> anyhow::Result<()> {
@@ -783,25 +820,26 @@ impl VulkanApp for VulkanApp21 {
 	    self.resize(width, height)?;
 	}
 
-	// Begin egui staging
-	/*self.egui_ctx.begin_frame(raw_input);
-	self.uniform_twiddler_app.update(&self.egui_ctx, &mut self.ui_app_context);
-	let (egui_output, paint_commands) = self.egui_ctx.end_frame();
-	let paint_jobs = self.egui_ctx.tessellate(paint_commands);
-	let egui_cmdbuf = Rc::clone(&self.ui_buffers[image_index as usize]);
-	egui_cmdbuf.record(
-	    vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT,
+	let frame = self.presenter.get_current_frame();
+
+	self.ui_manager.update_app_data(
+	    &self.device,
+	    frame.next(),
 	    &self.render_pass,
-	    2,
-	    &self.presenter,
-	    |writer| {
-		writer.join_render_pass(
-		    |rp_writer| {
-			panic!("NOT IMPLEMENTED!");
-		    }
-		)
-	    })?;*/
-	// End egui staging
+	    self.ui_subpass.into(),
+	    raw_input,
+	)?;
+
+	// Fetch the command buffers for this frame
+	let SecondaryBufferSet{
+	    scene: scene_buffers,
+	    hdr: hdr_buffer,
+	    ui: ui_buffer,
+	} = self.get_secondary_buffers(
+	    frame,
+	    &self.render_pass,
+	    self.ui_subpass.into(),
+	)?;
 
 	// Create the current frame's command buffer
 	let clear_values = [
@@ -823,12 +861,6 @@ impl VulkanApp for VulkanApp21 {
 	    },
 	];
 
-	let SecondaryBufferSet{
-	    scene: scene_buffer,
-	    hdr: hdr_buffer,
-	    ui: ui_buffer,
-	} = self.get_secondary_buffers();
-
 	let mut command_buffer = CommandBuffer::new(
 	    &self.device,
 	    self.device.get_default_graphics_queue(),
@@ -844,7 +876,7 @@ impl VulkanApp for VulkanApp21 {
 		    image_index as usize,
 		    true,
 		    |primary_rp_writer| {
-			primary_rp_writer.execute_commands(&[Rc::clone(&scene_buffer)]);
+			primary_rp_writer.execute_commands(&scene_buffers);
 			primary_rp_writer.next_subpass(true);
 			primary_rp_writer.execute_commands(&[Rc::clone(&hdr_buffer)]);
 			primary_rp_writer.next_subpass(true);
@@ -860,7 +892,7 @@ impl VulkanApp for VulkanApp21 {
         let since_last_frame = self.presenter.wait_for_next_frame()?;
 	let delta_time = ((since_last_frame.as_nanos() as f64) / 1_000_000_000_f64) as f32;
 
-        self.update_uniform_buffer(self.current_frame as usize, delta_time);
+        self.update_uniform_buffer(delta_time)?;
 	self.presenter.submit_command_buffer(
 	    &command_buffer,
 	    vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT,
@@ -879,7 +911,6 @@ impl VulkanApp for VulkanApp21 {
 	    println!("Resizing after rendering");
 	    self.resize(width, height)?;
 	}
-	self.current_frame = (self.current_frame + 1) % support::MAX_FRAMES_IN_FLIGHT;
         Ok(())
     }
 
@@ -924,25 +955,17 @@ impl VulkanApp for VulkanApp21 {
     }
 
     fn toggle_parallax(&mut self) -> bool {
-        self.global_uniform_buffer_set.update(
-	    |uniform_transform: &mut UniformBufferObject| -> anyhow::Result<bool> {
-		let val: bool = uniform_transform.use_parallax.into();
-		uniform_transform.use_parallax = (!val).into();
-		Ok(uniform_transform.use_parallax.into())
-            }).unwrap()
+        let uniform_transform = &mut self.global_uniform;
+	let val: bool = uniform_transform.use_parallax.into();
+	uniform_transform.use_parallax = (!val).into();
+	uniform_transform.use_parallax.into()
     }
 
     fn toggle_ao(&mut self) -> bool {
-        self.global_uniform_buffer_set.update(
-	    |uniform_transform: &mut UniformBufferObject| -> anyhow::Result<bool> {
-		let val: bool = uniform_transform.use_ao.into();
-		uniform_transform.use_ao = (!val).into();
-		Ok(uniform_transform.use_ao.into())
-            }).unwrap()
-    }
-
-    fn get_egui_ctx_ref(&self) -> &egui::CtxRef {
-	&self.egui_ctx
+        let uniform_transform = &mut self.global_uniform;
+	let val: bool = uniform_transform.use_ao.into();
+	uniform_transform.use_ao = (!val).into();
+	uniform_transform.use_ao.into()
     }
 }
 

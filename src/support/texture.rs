@@ -3,6 +3,7 @@ use ash::vk;
 use anyhow::anyhow;
 use image::{GenericImageView, DynamicImage};
 
+use std::sync::Arc;
 use std::rc::Rc;
 use std::ptr;
 use std::path::Path;
@@ -19,7 +20,59 @@ pub struct Texture {
 }
 
 impl Texture {
-    #[allow(unused)]
+    pub fn from_egui(
+	device: &Device,
+	egui_texture: &Arc<egui::paint::Texture>,
+    ) -> anyhow::Result<Self> {
+	let (image_width, image_height) = (egui_texture.width as u32, egui_texture.height as u32);
+	let image_size =
+            (std::mem::size_of::<u8>() as u32 * image_width * image_height * 4) as vk::DeviceSize;
+	let mip_levels = 1;
+
+	let upload_buffer = UploadSourceBuffer::new(device, image_size)?;
+	upload_buffer.copy_data(&egui_texture.pixels)?;
+
+	let mut image = Image::new(
+	    device,
+	    ImageBuilder::new2d(image_width as usize, image_height as usize)
+		.with_mip_levels(mip_levels)
+		.with_num_samples(vk::SampleCountFlags::TYPE_1)
+		.with_format(vk::Format::R8G8B8A8_SRGB)
+		.with_tiling(vk::ImageTiling::OPTIMAL)
+		.with_usage(
+		    vk::ImageUsageFlags::TRANSFER_SRC |
+		    vk::ImageUsageFlags::TRANSFER_DST |
+		    vk::ImageUsageFlags::SAMPLED,
+		)
+		.with_required_memory_properties(vk::MemoryPropertyFlags::DEVICE_LOCAL)
+		.with_sharing_mode(vk::SharingMode::EXCLUSIVE)
+	)?;
+
+	image.transition_layout(
+            vk::ImageLayout::UNDEFINED,
+            vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+            mip_levels,
+	)?;
+
+	unsafe {
+	    Image::copy_buffer_no_deps(&upload_buffer, &image)?;
+	}
+
+        let image_view = Rc::new(ImageView::from_image(
+            &image,
+            vk::ImageAspectFlags::COLOR,
+            mip_levels,
+        )?);
+
+	let image = Rc::new(image);
+
+        Ok(Self{
+            image,
+            image_view,
+	    mip_levels,
+        })
+    }
+
     pub fn from_image_builder(
 	device: &Device,
 	aspect: vk::ImageAspectFlags,
@@ -74,7 +127,6 @@ impl Texture {
     }
 
     pub fn from_image(device: &Device, mut image_object: DynamicImage, srgb: bool) -> anyhow::Result<Self> {
-	image_object = image_object.flipv();
 	let (image_width, image_height) = (image_object.width(), image_object.height());
 	let image_size =
             (std::mem::size_of::<u8>() as u32 * image_width * image_height * 4) as vk::DeviceSize;

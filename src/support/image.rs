@@ -10,6 +10,7 @@ use super::utils::{Defaulted, find_memory_type};
 use super::command_buffer::CommandBuffer;
 use super::buffer::UploadSourceBuffer;
 
+#[derive(Clone)]
 pub struct ImageBuilder {
     size: Defaulted<Vec<u32>>,
     image_type: Defaulted<vk::ImageType>,

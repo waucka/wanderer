@@ -50,6 +50,135 @@ pub mod descriptor;
 
 use utils::Defaulted;
 
+#[derive(Copy, Clone)]
+pub struct FrameId {
+    idx: usize,
+}
+
+impl FrameId {
+    fn initial() -> Self {
+	Self{
+	    idx: 0,
+	}
+    }
+
+    fn advance(&mut self) {
+	self.idx = (self.idx + 1) % MAX_FRAMES_IN_FLIGHT;
+    }
+
+    pub fn next(&self) -> Self {
+	Self {
+	    idx: (self.idx + 1) % MAX_FRAMES_IN_FLIGHT,
+	}
+    }
+}
+
+impl From<usize> for FrameId {
+    fn from(idx: usize) -> Self {
+	if idx >= MAX_FRAMES_IN_FLIGHT {
+	    panic!(
+		"Tried to create a FrameId with index {} (must be < {})",
+		idx,
+		MAX_FRAMES_IN_FLIGHT,
+	    );
+	}
+	Self{
+	    idx,
+	}
+    }
+}
+
+impl From<u32> for FrameId {
+    fn from(idx: u32) -> Self {
+	if idx as usize >= MAX_FRAMES_IN_FLIGHT {
+	    panic!(
+		"Tried to create a FrameId with index {} (must be < {})",
+		idx,
+		MAX_FRAMES_IN_FLIGHT,
+	    );
+	}
+	Self{
+	    idx: idx as usize,
+	}
+    }
+}
+
+impl std::fmt::Display for FrameId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.idx.fmt(f)
+    }
+}
+
+pub struct PerFrameSet<T> {
+    items: Vec<T>,
+}
+
+impl<T> PerFrameSet<T> {
+    pub fn new<F>(mut item_generator: F) -> anyhow::Result<Self>
+    where
+        F: FnMut(FrameId) -> anyhow::Result<T>
+    {
+	let mut items = Vec::new();
+	for i in 0..MAX_FRAMES_IN_FLIGHT {
+	    items.push(item_generator(FrameId::from(i))?);
+	}
+	Ok(Self{
+	    items,
+	})
+    }
+
+    pub fn get(&self, frame: FrameId) -> &T {
+	&self.items[frame.idx]
+    }
+
+    pub fn get_mut(&mut self, frame: FrameId) -> &mut T {
+	&mut self.items[frame.idx]
+    }
+
+    // Extracts data from self and creates a new PerFrameSet containing the extracted data
+    pub fn extract<F, R>(&self, extractor: F) -> anyhow::Result<PerFrameSet<R>>
+    where
+        F: Fn(&T) -> anyhow::Result<R>
+    {
+	let new_set: PerFrameSet<R> = PerFrameSet::new(|frame| {
+	    extractor(self.get(FrameId::from(frame)))
+	})?;
+	Ok(new_set)
+    }
+
+    pub fn foreach<F>(&mut self, mut action: F) -> anyhow::Result<()>
+    where
+        F: FnMut(FrameId, &mut T) -> anyhow::Result<()>
+    {
+	for i in 0..MAX_FRAMES_IN_FLIGHT {
+	    let item = &mut self.items[i];
+	    action(FrameId::from(i), item)?;
+	}
+	Ok(())
+    }
+
+    pub fn replace<F>(&mut self, mut constructor: F) -> anyhow::Result<()>
+    where
+        F: FnMut(FrameId, &T) -> anyhow::Result<T>
+    {
+	let mut new_items = Vec::new();
+	for i in 0..MAX_FRAMES_IN_FLIGHT {
+	    let old_item = &self.items[i];
+	    new_items.push(constructor(FrameId::from(i), old_item)?);
+	}
+	self.items = new_items;
+	Ok(())
+    }
+}
+
+impl<T: Clone> Clone for PerFrameSet<T> {
+    fn clone(&self) -> Self {
+	Self{
+	    items: self.items.clone(),
+	}
+    }
+}
+
 pub fn pick_physical_device(
     instance: &ash::Instance,
     surface_loader: &ash::extensions::khr::Surface,
@@ -634,9 +763,19 @@ struct InnerDevice {
     queue_set: RefCell<QueueSet>,
 }
 
+impl std::fmt::Debug for InnerDevice {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+	f.debug_struct("InnerDevice")
+	    .field("window", &self.window)
+	    .field("surface", &self.surface)
+	    .field("physical_device", &self.physical_device)
+	    .finish()
+    }
+}
+
 impl InnerDevice {
     pub fn new(event_loop: &EventLoop<()>, builder: DeviceBuilder) -> anyhow::Result<Rc<Self>> {
-        let window_title = builder.window_title.get_value();
+	let window_title = builder.window_title.get_value();
         let (window_width, window_height) = builder.window_size.get_value();
         let window = super::window::init_window(
             event_loop,

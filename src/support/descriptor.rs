@@ -4,6 +4,7 @@ use anyhow::anyhow;
 use glsl_layout::AsStd140;
 
 use std::collections::HashMap;
+use std::os::raw::c_void;
 use std::pin::Pin;
 use std::ptr;
 use std::rc::Rc;
@@ -264,28 +265,37 @@ impl DescriptorSetLayout {
 	device: &Device,
 	bindings: Vec<vk::DescriptorSetLayoutBinding>,
     ) -> anyhow::Result<Self> {
-	/*let binding_flags = [
-	    vk::DescriptorBindingFlags::PARTIALLY_BOUND,
-	    vk::DescriptorBindingFlags::PARTIALLY_BOUND_EXT,
-	];
+	let mut binding_flags = vec![];
+	for _ in 0..bindings.len() {
+	    let flags = vk::DescriptorBindingFlags::PARTIALLY_BOUND
+		| vk::DescriptorBindingFlags::PARTIALLY_BOUND_EXT;
+	    binding_flags.push(flags);
+	}
 	let binding_flags_info = vk::DescriptorSetLayoutBindingFlagsCreateInfo{
 	    s_type: vk::StructureType::DESCRIPTOR_SET_LAYOUT_BINDING_FLAGS_CREATE_INFO,
 	    p_next: ptr::null(),
 	    binding_count: binding_flags.len() as u32,
 	    p_binding_flags: binding_flags.as_ptr(),
 	};
-	let p_next: *const c_void = ((&binding_flags_info) as *const _) as *const c_void;*/
+	let p_next: *const c_void = ((&binding_flags_info) as *const _) as *const c_void;
 	let layout_info = vk::DescriptorSetLayoutCreateInfo{
 	    s_type: vk::StructureType::DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
-	    p_next: ptr::null(),
+	    p_next,
 	    flags: vk::DescriptorSetLayoutCreateFlags::empty(),
 	    binding_count: bindings.len() as u32,
 	    p_bindings: bindings.as_ptr(),
 	};
+	for i in 0..bindings.len() {
+	    dbg!(binding_flags[i]);
+	    dbg!(bindings[i]);
+	}
+	dbg!(&layout_info);
 	Ok(Self{
 	    device: device.inner.clone(),
 	    layout: unsafe {
-		device.inner.device.create_descriptor_set_layout(&layout_info, None)?
+		let layout = device.inner.device.create_descriptor_set_layout(&layout_info, None)?;
+		dbg!(&layout);
+		layout
 	    },
 	    bindings,
 	})
@@ -325,9 +335,7 @@ impl DescriptorPool {
 	Ok(this)
     }
 
-    #[allow(unused)]
     pub fn reset(&mut self) -> anyhow::Result<()> {
-	panic!("This shouldn't be happening yet!");
 	let mut i = 0;
 	for set in &self.sets {
 	    if Rc::strong_count(set) > 1 {
@@ -337,12 +345,14 @@ impl DescriptorPool {
 	    }
 	    i += 1;
 	}
+	self.sets.clear();
 	unsafe {
 	    if self.pools.len() > 1 {
-		for pool in self.pools.drain(1..) {
-		    self.device.device.destroy_descriptor_pool(pool, None);
+		for pool in self.pools[1..].iter() {
+		    self.device.device.destroy_descriptor_pool(*pool, None);
 		}
 	    }
+	    self.pools.truncate(1);
 	    self.device.device.reset_descriptor_pool(
 		self.pools[0],
 		vk::DescriptorPoolResetFlags::empty(),
@@ -377,7 +387,7 @@ impl DescriptorPool {
 	&mut self,
 	count: usize,
 	layout: &DescriptorSetLayout,
-	items: &Vec<Box<dyn DescriptorRef>>,
+	items: &[Box<dyn DescriptorRef>],
     ) -> anyhow::Result<Vec<Rc<DescriptorSet>>> {
 	if items.len() != layout.bindings.len() {
 	    return Err(anyhow!(
@@ -448,6 +458,7 @@ impl DescriptorPool {
 		let mut sets = Vec::new();
 		for set in vk_sets {
 		    sets.push(Rc::new(DescriptorSet{
+			device: Rc::clone(&self.device),
 			inner: set,
 		    }));
 		}
@@ -485,7 +496,38 @@ impl Drop for DescriptorPool {
 
 #[derive(Debug)]
 pub struct DescriptorSet {
+    device: Rc<InnerDevice>,
     pub (in super) inner: vk::DescriptorSet,
+}
+
+impl DescriptorSet {
+    pub fn update(
+	set: Rc<DescriptorSet>,
+	items: &[(u32, Box<dyn DescriptorRef>)],
+    ) {
+	let mut writes = vec![];
+	// These have to stick around until the call to update_descriptor_sets() returns.
+	let mut writers = vec![];
+	for (binding, item) in items.iter() {
+	    writers.push(item.get_write(Rc::<DescriptorSet>::clone(&set), *binding));
+	    writes.push(writers.last().unwrap().get());
+	}
+	if DEBUG_DESCRIPTOR_SETS {
+	    println!("Performing {} updates to descriptor set {:?}...", writes.len(), set);
+	    for write in writes.iter() {
+		println!(
+		    "\tset: {:?}\n\tbinding: {}\n\ttype: {:?}\n\tcount: {}",
+		    write.dst_set,
+		    write.dst_binding,
+		    write.descriptor_type,
+		    write.descriptor_count,
+		);
+	    }
+	}
+	unsafe {
+	    set.device.device.update_descriptor_sets(&writes, &[]);
+	}
+    }
 }
 
 impl Drop for DescriptorSet {

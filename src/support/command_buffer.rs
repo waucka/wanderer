@@ -33,6 +33,11 @@ impl SecondaryCommandBuffer {
 	Ok(secondary)
     }
 
+    pub fn reset(&self) -> anyhow::Result<()> {
+	self.buf.borrow_mut().reset()
+    }
+
+    // TODO: should this be mut?
     pub fn record<T, R>(
 	&self,
 	usage_flags: vk::CommandBufferUsageFlags,

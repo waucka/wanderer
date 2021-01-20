@@ -32,7 +32,6 @@ pub trait VulkanApp {
     fn set_z_speed(&mut self, speed: f32);
     fn toggle_parallax(&mut self) -> bool;
     fn toggle_ao(&mut self) -> bool;
-    fn get_egui_ctx_ref(&self) -> &egui::CtxRef;
 }
 
 pub fn main_loop<A: 'static + VulkanApp>(event_loop: EventLoop<()>, mut vulkan_app: A) {
