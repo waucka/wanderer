@@ -6,7 +6,6 @@ use glsl_layout::{AsStd140};
 
 use std::collections::HashMap;
 use std::path::Path;
-use std::ptr;
 use std::rc::Rc;
 
 mod platforms;
@@ -24,6 +23,7 @@ use models::{/*Model,*/ ModelNonIndexed};
 use support::{Device, DeviceBuilder, PerFrameSet, FrameId};
 use support::command_buffer::{CommandBuffer, SecondaryCommandBuffer};
 use support::descriptor::{
+    DescriptorBindings,
     DescriptorPool,
     DescriptorSet,
     DescriptorSetLayout,
@@ -384,15 +384,16 @@ impl VulkanApp21 {
 
 	// TODO: I feel like the descriptor layout, uniform buffers, and descriptor sets
 	//       could be created together in some convenient way.
+	let global_descriptor_bindings = DescriptorBindings::new()
+	    .with_binding(
+		vk::DescriptorType::UNIFORM_BUFFER,
+		1,
+		vk::ShaderStageFlags::ALL,
+		false,
+	    );
 	let global_descriptor_set_layout = DescriptorSetLayout::new(
 	    &device,
-	    vec![vk::DescriptorSetLayoutBinding{
-		binding: 0,
-		descriptor_type: vk::DescriptorType::UNIFORM_BUFFER,
-		descriptor_count: 1,
-		stage_flags: vk::ShaderStageFlags::ALL,
-		p_immutable_samplers: ptr::null(),
-	    }],
+	    global_descriptor_bindings,
 	)?;
 
 	let global_uniform = UniformBufferObject{
@@ -535,24 +536,22 @@ impl VulkanApp21 {
 
 	// Begin HDR setup
 
+	let hdr_descriptor_bindings = DescriptorBindings::new()
+	    .with_binding(
+		vk::DescriptorType::INPUT_ATTACHMENT,
+		1,
+		vk::ShaderStageFlags::FRAGMENT,
+		false,
+	    )
+	    .with_binding(
+		vk::DescriptorType::UNIFORM_BUFFER,
+		1,
+		vk::ShaderStageFlags::FRAGMENT,
+		false,
+	    );
 	let hdr_descriptor_set_layout = DescriptorSetLayout::new(
 	    &device,
-	    vec![
-		vk::DescriptorSetLayoutBinding{
-		    binding: 0,
-		    descriptor_type: vk::DescriptorType::INPUT_ATTACHMENT,
-		    descriptor_count: 1,
-		    stage_flags: vk::ShaderStageFlags::FRAGMENT,
-		    p_immutable_samplers: ptr::null(),
-		},
-		vk::DescriptorSetLayoutBinding{
-		    binding: 1,
-		    descriptor_type: vk::DescriptorType::UNIFORM_BUFFER,
-		    descriptor_count: 1,
-		    stage_flags: vk::ShaderStageFlags::FRAGMENT,
-		    p_immutable_samplers: ptr::null(),
-		},
-	    ],
+	    hdr_descriptor_bindings,
 	)?;
 
 	let hdr_control_uniform = HdrControlUniform{

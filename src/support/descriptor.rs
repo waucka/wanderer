@@ -254,23 +254,95 @@ impl DescriptorRef for InputAttachmentRef {
     }
 }
 
+#[derive(Clone)]
+pub struct DescriptorBindings {
+    bindings: Vec<(vk::DescriptorSetLayoutBinding, vk::DescriptorBindingFlags)>,
+    next_binding_id: u32,
+}
+
+impl DescriptorBindings {
+    pub fn new() -> Self {
+	Self{
+	    bindings: Vec::new(),
+	    next_binding_id: 0,
+	}
+    }
+
+    pub fn len(&self) -> usize {
+	self.bindings.len()
+    }
+
+    pub fn with_binding(
+	mut self,
+	descriptor_type: vk::DescriptorType,
+	descriptor_count: u32,
+	stage_flags: vk::ShaderStageFlags,
+	allow_partial: bool,
+    ) -> Self {
+	let binding_id = self.next_binding_id;
+	self.next_binding_id += 1;
+	self.with_exact_binding(
+	    binding_id,
+	    descriptor_type,
+	    descriptor_count,
+	    stage_flags,
+	    allow_partial,
+	)
+    }
+
+    pub fn with_exact_binding(
+	mut self,
+	binding: u32,
+	descriptor_type: vk::DescriptorType,
+	descriptor_count: u32,
+	stage_flags: vk::ShaderStageFlags,
+	allow_partial: bool,
+    ) -> Self {
+	let flags = if allow_partial {
+	    vk::DescriptorBindingFlags::PARTIALLY_BOUND
+		| vk::DescriptorBindingFlags::PARTIALLY_BOUND_EXT
+	} else {
+	    vk::DescriptorBindingFlags::empty()
+	};
+
+	self.bindings.push(
+	    (
+		vk::DescriptorSetLayoutBinding{
+		    binding,
+		    descriptor_type,
+		    descriptor_count,
+		    stage_flags,
+		    p_immutable_samplers: ptr::null(),
+		},
+		flags,
+	    )
+	);
+	self
+    }
+}
+
 pub struct DescriptorSetLayout {
     device: Rc<InnerDevice>,
     pub (in super) layout: vk::DescriptorSetLayout,
-    bindings: Vec<vk::DescriptorSetLayoutBinding>,
+    bindings: DescriptorBindings,
 }
 
 impl DescriptorSetLayout {
     pub fn new(
 	device: &Device,
-	bindings: Vec<vk::DescriptorSetLayoutBinding>,
+	bindings: DescriptorBindings,
     ) -> anyhow::Result<Self> {
-	let mut binding_flags = vec![];
-	for _ in 0..bindings.len() {
-	    let flags = vk::DescriptorBindingFlags::PARTIALLY_BOUND
-		| vk::DescriptorBindingFlags::PARTIALLY_BOUND_EXT;
-	    binding_flags.push(flags);
-	}
+	let (binding_set, binding_flags) = {
+	    let mut binding_sets = vec![];
+	    let mut binding_flags = vec![];
+	    for (binding, flags) in bindings.bindings.iter() {
+		dbg!(binding);
+		dbg!(flags);
+		binding_sets.push(binding.clone());
+		binding_flags.push(*flags);
+	    }
+	    (binding_sets, binding_flags)
+	};
 	let binding_flags_info = vk::DescriptorSetLayoutBindingFlagsCreateInfo{
 	    s_type: vk::StructureType::DESCRIPTOR_SET_LAYOUT_BINDING_FLAGS_CREATE_INFO,
 	    p_next: ptr::null(),
@@ -282,13 +354,9 @@ impl DescriptorSetLayout {
 	    s_type: vk::StructureType::DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
 	    p_next,
 	    flags: vk::DescriptorSetLayoutCreateFlags::empty(),
-	    binding_count: bindings.len() as u32,
-	    p_bindings: bindings.as_ptr(),
+	    binding_count: binding_set.len() as u32,
+	    p_bindings: binding_set.as_ptr(),
 	};
-	for i in 0..bindings.len() {
-	    dbg!(binding_flags[i]);
-	    dbg!(bindings[i]);
-	}
 	dbg!(&layout_info);
 	Ok(Self{
 	    device: device.inner.clone(),

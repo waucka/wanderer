@@ -14,6 +14,7 @@ use super::support::{Device, PerFrameSet, FrameId};
 use super::support::buffer::{VertexBuffer, IndexBuffer, UniformBuffer};
 use super::support::command_buffer::SecondaryCommandBuffer;
 use super::support::descriptor::{
+    DescriptorBindings,
     DescriptorPool,
     DescriptorSetLayout,
     DescriptorSet,
@@ -296,25 +297,24 @@ impl UIAppRenderer {
 	    })?
 	};
 
+	let descriptor_bindings = DescriptorBindings::new()
+	    .with_binding(
+		vk::DescriptorType::UNIFORM_BUFFER,
+		1,
+		vk::ShaderStageFlags::ALL,
+		false,
+	    )
+	    .with_binding(
+		vk::DescriptorType::COMBINED_IMAGE_SAMPLER,
+		1,
+		vk::ShaderStageFlags::ALL,
+		false,
+	    );
+
 	//TODO: need to set this up for "render stuff uploaded during previous frame" workflow!
 	let descriptor_set_layout = DescriptorSetLayout::new(
 	    device,
-	    vec![
-		vk::DescriptorSetLayoutBinding{
-		    binding: 0,
-		    descriptor_type: vk::DescriptorType::UNIFORM_BUFFER,
-		    descriptor_count: 1,
-		    stage_flags: vk::ShaderStageFlags::ALL,
-		    p_immutable_samplers: ptr::null(),
-		},
-		vk::DescriptorSetLayoutBinding{
-		    binding: 1,
-		    descriptor_type: vk::DescriptorType::COMBINED_IMAGE_SAMPLER,
-		    descriptor_count: 1,
-		    stage_flags: vk::ShaderStageFlags::ALL,
-		    p_immutable_samplers: ptr::null(),
-		},
-	    ],
+	    descriptor_bindings,
 	)?;
 
 	let set_layouts = [&descriptor_set_layout];

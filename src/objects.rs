@@ -6,13 +6,13 @@ use glsl_layout::AsStd140;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::path::Path;
-use std::ptr;
 use std::rc::Rc;
 
 use super::support::{Device, PerFrameSet, FrameId};
 use super::support::buffer::{VertexBuffer, IndexBuffer, UniformBuffer};
 use super::support::command_buffer::{SecondaryCommandBuffer};
 use super::support::descriptor::{
+    DescriptorBindings,
     DescriptorPool,
     DescriptorSet,
     DescriptorSetLayout,
@@ -91,49 +91,48 @@ impl<V: Vertex + 'static> StaticGeometryRenderer<V> {
 	    }),
 	)?);
 
+	let type_descriptor_bindings = DescriptorBindings::new()
+	    .with_binding(
+		vk::DescriptorType::UNIFORM_BUFFER,
+		1,
+		vk::ShaderStageFlags::ALL,
+		false,
+	    )
+	    .with_binding(
+		vk::DescriptorType::COMBINED_IMAGE_SAMPLER,
+		Self::MAX_TEXTURES,
+		vk::ShaderStageFlags::ALL,
+		true
+	    )
+	    .with_binding(
+		vk::DescriptorType::COMBINED_IMAGE_SAMPLER,
+		Self::MAX_TEXTURES,
+		vk::ShaderStageFlags::ALL,
+		true
+	    )
+	    .with_binding(
+		vk::DescriptorType::COMBINED_IMAGE_SAMPLER,
+		Self::MAX_TEXTURES,
+		vk::ShaderStageFlags::ALL,
+		true
+	    );
+
 	let type_descriptor_set_layout = DescriptorSetLayout::new(
 	    device,
-	    vec![
-		vk::DescriptorSetLayoutBinding{
-		    binding: 0,
-		    descriptor_type: vk::DescriptorType::UNIFORM_BUFFER,
-		    descriptor_count: 1,
-		    stage_flags: vk::ShaderStageFlags::ALL,
-		    p_immutable_samplers: ptr::null(),
-		},
-		vk::DescriptorSetLayoutBinding{
-		    binding: 1,
-		    descriptor_type: vk::DescriptorType::COMBINED_IMAGE_SAMPLER,
-		    descriptor_count: Self::MAX_TEXTURES,
-		    stage_flags: vk::ShaderStageFlags::ALL,
-		    p_immutable_samplers: ptr::null(),
-		},
-		vk::DescriptorSetLayoutBinding{
-		    binding: 2,
-		    descriptor_type: vk::DescriptorType::COMBINED_IMAGE_SAMPLER,
-		    descriptor_count: Self::MAX_TEXTURES,
-		    stage_flags: vk::ShaderStageFlags::ALL,
-		    p_immutable_samplers: ptr::null(),
-		},
-		vk::DescriptorSetLayoutBinding{
-		    binding: 3,
-		    descriptor_type: vk::DescriptorType::COMBINED_IMAGE_SAMPLER,
-		    descriptor_count: Self::MAX_TEXTURES,
-		    stage_flags: vk::ShaderStageFlags::ALL,
-		    p_immutable_samplers: ptr::null(),
-		},
-	    ],
+	    type_descriptor_bindings,
 	)?;
+
+	let instance_descriptor_bindings = DescriptorBindings::new()
+	    .with_binding(
+		vk::DescriptorType::UNIFORM_BUFFER,
+		Self::NUM_UNIFORM_BUFFERS_PER_INSTANCE,
+		vk::ShaderStageFlags::ALL,
+		false,
+	    );
 
 	let instance_descriptor_set_layout = DescriptorSetLayout::new(
 	    device,
-	    vec![vk::DescriptorSetLayoutBinding{
-		binding: 0,
-		descriptor_type: vk::DescriptorType::UNIFORM_BUFFER,
-		descriptor_count: Self::NUM_UNIFORM_BUFFERS_PER_INSTANCE,
-		stage_flags: vk::ShaderStageFlags::ALL,
-		p_immutable_samplers: ptr::null(),
-	    }],
+	    instance_descriptor_bindings,
 	)?;
 
 	let mut type_pool = {
@@ -240,12 +239,12 @@ impl<V: Vertex + 'static> StaticGeometryRenderer<V> {
 	    &set_layouts,
 	    PipelineParameters::new()
 		.with_msaa_samples(msaa_samples)
-		.with_cull_mode(vk::CullModeFlags::NONE)
+		.with_cull_mode(vk::CullModeFlags::BACK)
 		.with_front_face(vk::FrontFace::COUNTER_CLOCKWISE)
 		.with_depth_test()
 		.with_depth_write()
 		.with_depth_compare_op(vk::CompareOp::LESS)
-		.with_subpass(0),
+		.with_subpass(subpass),
 	)?);
 
 	let objects = Vec::new();
