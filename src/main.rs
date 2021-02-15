@@ -192,6 +192,21 @@ impl UIManager {
 	    render_pass,
 	)
     }
+
+    fn set_app(
+	&mut self,
+	app: Rc<dyn UIApp>,
+    ) {
+	self.app = Some(app);
+    }
+
+    fn clear_app(&mut self) {
+	self.app = None;
+    }
+
+    fn has_app(&self) -> bool {
+	self.app.is_some()
+    }
 }
 
 struct GlobalFrameData {
@@ -230,7 +245,7 @@ struct VulkanApp21 {
     postprocessing_subpass: SubpassRef,
     ui_subpass: SubpassRef,
 
-    uniform_twiddler_app: ui_app::UniformTwiddler,
+    uniform_twiddler_app: Rc<ui_app::UniformTwiddler>,
 
     is_framebuffer_resized: bool,
     yaw_speed: f32,
@@ -262,7 +277,7 @@ impl VulkanApp21 {
         )?;
 
 	// Begin egui setup
-	let uniform_twiddler_app = Default::default();
+	let uniform_twiddler_app = Rc::new(Default::default());
 	// End egui setup
 	// TODO: figure out how to support MSAA for this engine or use FXAA or something
         let msaa_samples = vk::SampleCountFlags::TYPE_1;//device.get_max_usable_sample_count();
@@ -954,18 +969,15 @@ impl VulkanApp for VulkanApp21 {
         self.camera_speed.z = speed;
     }
 
-    fn toggle_parallax(&mut self) -> bool {
-        let uniform_transform = &mut self.global_uniform;
-	let val: bool = uniform_transform.use_parallax.into();
-	uniform_transform.use_parallax = (!val).into();
-	uniform_transform.use_parallax.into()
-    }
-
-    fn toggle_ao(&mut self) -> bool {
-        let uniform_transform = &mut self.global_uniform;
-	let val: bool = uniform_transform.use_ao.into();
-	uniform_transform.use_ao = (!val).into();
-	uniform_transform.use_ao.into()
+    fn toggle_uniform_twiddler(&mut self) -> bool {
+	if self.ui_manager.has_app() {
+	    self.ui_manager.clear_app();
+	    false
+	} else {
+	    let app = Rc::clone(&self.uniform_twiddler_app);
+	    self.ui_manager.set_app(app);
+	    true
+	}
     }
 }
 
