@@ -2,8 +2,8 @@ use winit::event_loop::EventLoop;
 use ash::vk;
 use cgmath::{Deg, Matrix4, Point3, Vector3, Vector4, InnerSpace};
 use glsl_layout::{AsStd140};
-//use egui::paint::FontDefinitions;
 
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::path::Path;
 use std::rc::Rc;
@@ -51,7 +51,7 @@ use utils::{Matrix4f, Vector4f};
 const WINDOW_TITLE: &'static str = "Wanderer";
 const WINDOW_WIDTH: usize = 1024;
 const WINDOW_HEIGHT: usize = 768;
-const MODEL_PATH: &'static str = "viking_room.obj";
+//const MODEL_PATH: &'static str = "viking_room.obj";
 //const TEXTURE_PATH: &'static str = "viking_room.png";
 
 #[derive(Debug, Default, Clone, Copy, AsStd140)]
@@ -102,7 +102,7 @@ impl Clone for SecondaryBufferSet {
 
 
 pub struct UIManager {
-    renderer: UIAppRenderer,
+    renderer: RefCell<UIAppRenderer>,
     app: Option<Rc<dyn UIApp>>,
     app_context: ui_app::AppContext,
     egui_ctx: egui::CtxRef,
@@ -117,14 +117,14 @@ impl UIManager {
 	subpass: u32,
     ) -> anyhow::Result<Self> {
 	Ok(Self{
-	    renderer: UIAppRenderer::new(
+	    renderer: RefCell::new(UIAppRenderer::new(
 		device,
 		window_width,
 		window_height,
 		render_pass,
 		subpass,
 		device.get_default_graphics_queue(),
-	    )?,
+	    )?),
 	    app: None,
 	    app_context: ui_app::AppContext::new(),
 	    egui_ctx: egui::CtxRef::default(),
@@ -135,8 +135,6 @@ impl UIManager {
 	&mut self,
 	device: &Device,
 	frame: FrameId,
-	render_pass: &RenderPass,
-	subpass: u32,
 	raw_input: egui::RawInput,
     ) -> anyhow::Result<()> {
 	match &self.app {
@@ -146,18 +144,16 @@ impl UIManager {
 		let (_egui_output, paint_commands) = self.egui_ctx.end_frame();
 		let egui_texture = self.egui_ctx.texture();
 		let paint_jobs = self.egui_ctx.tessellate(paint_commands);
-		self.renderer.update_app_data(
+		self.renderer.borrow_mut().add_frame_data(
 		    device,
 		    frame,
 		    &paint_jobs,
 		    &egui_texture,
-		    render_pass,
-		    subpass,
 		)?;
 		Ok(())
 	    },
 	    None => {
-		self.renderer.remove_app_data(frame);
+		self.renderer.borrow_mut().clear_frame_data();
 		Ok(())
 	    },
 	}
@@ -165,19 +161,15 @@ impl UIManager {
 
     fn get_command_buffer(
 	&self,
-	frame: FrameId,
+	device: &Device,
 	render_pass: &RenderPass,
 	subpass: u32,
     ) -> anyhow::Result<Rc<SecondaryCommandBuffer>> {
-	self.renderer.get_command_buffer(
-	    frame,
+	self.renderer.borrow_mut().create_command_buffer(
+	    device,
 	    render_pass,
 	    subpass,
 	)
-    }
-
-    fn sync_uniform_buffers(&self, frame: FrameId) -> anyhow::Result<()> {
-	self.renderer.sync_uniform_buffers(frame)
     }
 
     fn update_pipeline_viewport(
@@ -186,7 +178,7 @@ impl UIManager {
 	viewport_height: usize,
 	render_pass: &RenderPass,
     ) -> anyhow::Result<()> {
-	self.renderer.update_pipeline_viewport(
+	self.renderer.borrow_mut().update_pipeline_viewport(
 	    viewport_width,
 	    viewport_height,
 	    render_pass,
@@ -456,8 +448,8 @@ impl VulkanApp21 {
 		    &device,
 		    Some(&global_uniform),
 		)?);
-		let items: Vec<Box<dyn DescriptorRef>> = vec![
-		    Box::new(UniformBufferRef::new(vec![Rc::clone(&uniform_buffer)])),
+		let items: Vec<Rc<dyn DescriptorRef>> = vec![
+		    Rc::new(UniformBufferRef::new(vec![Rc::clone(&uniform_buffer)])),
 		];
 
 		let sets = global_pool.create_descriptor_sets(
@@ -583,12 +575,12 @@ impl VulkanApp21 {
 		    Some(&hdr_control_uniform),
 		)?);
 
-		let items: Vec<Box<dyn DescriptorRef>> = vec![
-		    Box::new(InputAttachmentRef::new(
+		let items: Vec<Rc<dyn DescriptorRef>> = vec![
+		    Rc::new(InputAttachmentRef::new(
 			attachment_set.get(&render_target_color),
 			vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
 		    )),
-		    Box::new(UniformBufferRef::new(vec![Rc::clone(&uniform_buffer)])),
+		    Rc::new(UniformBufferRef::new(vec![Rc::clone(&uniform_buffer)])),
 		];
 		let sets = global_pool.create_descriptor_sets(
 		    1,
@@ -691,7 +683,7 @@ impl VulkanApp21 {
 	    scene: self.scene.get_command_buffers(frame)?,
 	    hdr: self.hdr.get_command_buffer(frame)?,
 	    ui: self.ui_manager.get_command_buffer(
-		frame,
+		&self.device,
 		render_pass,
 		subpass,
 	    )?,
@@ -786,12 +778,12 @@ impl VulkanApp21 {
 	let hdr_frame_data = &self.hdr_frame_data;
 	hdr.replace_descriptor_sets(
 	    |frame, _| {
-		let items: Vec<Box<dyn DescriptorRef>> = vec![
-		    Box::new(InputAttachmentRef::new(
+		let items: Vec<Rc<dyn DescriptorRef>> = vec![
+		    Rc::new(InputAttachmentRef::new(
 			Rc::clone(render_target_color),
 			vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
 		    )),
-		    Box::new(UniformBufferRef::new(vec![
+		    Rc::new(UniformBufferRef::new(vec![
 			Rc::clone(&hdr_frame_data.get(frame).uniform_buffer),
 		    ])),
 		];
@@ -840,8 +832,6 @@ impl VulkanApp for VulkanApp21 {
 	self.ui_manager.update_app_data(
 	    &self.device,
 	    frame.next(),
-	    &self.render_pass,
-	    self.ui_subpass.into(),
 	    raw_input,
 	)?;
 

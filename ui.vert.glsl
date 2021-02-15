@@ -3,10 +3,6 @@
 
 #extension GL_ARB_separate_shader_objects : enable
 
-layout (set = 0, binding = 0, std140) uniform UniformBufferObject {
-    vec4 tint;
-} global_ubo;
-
 layout (location = 0) in vec2 pos;
 layout (location = 1) in vec2 uv;
 layout (location = 2) in vec4 color;

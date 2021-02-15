@@ -3,6 +3,7 @@ use ash::vk;
 use anyhow::anyhow;
 use glsl_layout::AsStd140;
 
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::os::raw::c_void;
 use std::pin::Pin;
@@ -455,7 +456,7 @@ impl DescriptorPool {
 	&mut self,
 	count: usize,
 	layout: &DescriptorSetLayout,
-	items: &[Box<dyn DescriptorRef>],
+	items: &[Rc<dyn DescriptorRef>],
     ) -> anyhow::Result<Vec<Rc<DescriptorSet>>> {
 	if items.len() != layout.bindings.len() {
 	    return Err(anyhow!(
@@ -473,9 +474,10 @@ impl DescriptorPool {
 	    for (binding, item) in items.iter().enumerate() {
 		writers.push(item.get_write(Rc::<DescriptorSet>::clone(set), binding as u32));
 		writes.push(writers.last().unwrap().get());
+		set.add_dependency(Rc::<dyn DescriptorRef>::clone(item));
 	    }
 	    if DEBUG_DESCRIPTOR_SETS {
-		println!("Performing {} writes to descriptor set {:?}...", writes.len(), set);
+		println!("Performing {} writes to descriptor set {:?}...", writes.len(), set.inner);
 		for write in writes.iter() {
 		    println!(
 			"\tset: {:?}\n\tbinding: {}\n\ttype: {:?}\n\tcount: {}",
@@ -528,6 +530,7 @@ impl DescriptorPool {
 		    sets.push(Rc::new(DescriptorSet{
 			device: Rc::clone(&self.device),
 			inner: set,
+			dependencies: RefCell::new(Vec::new()),
 		    }));
 		}
 		sets
@@ -562,39 +565,15 @@ impl Drop for DescriptorPool {
     }
 }
 
-#[derive(Debug)]
 pub struct DescriptorSet {
     device: Rc<InnerDevice>,
     pub (in super) inner: vk::DescriptorSet,
+    dependencies: RefCell<Vec<Rc<dyn DescriptorRef>>>,
 }
 
 impl DescriptorSet {
-    pub fn update(
-	set: Rc<DescriptorSet>,
-	items: &[(u32, Box<dyn DescriptorRef>)],
-    ) {
-	let mut writes = vec![];
-	// These have to stick around until the call to update_descriptor_sets() returns.
-	let mut writers = vec![];
-	for (binding, item) in items.iter() {
-	    writers.push(item.get_write(Rc::<DescriptorSet>::clone(&set), *binding));
-	    writes.push(writers.last().unwrap().get());
-	}
-	if DEBUG_DESCRIPTOR_SETS {
-	    println!("Performing {} updates to descriptor set {:?}...", writes.len(), set);
-	    for write in writes.iter() {
-		println!(
-		    "\tset: {:?}\n\tbinding: {}\n\ttype: {:?}\n\tcount: {}",
-		    write.dst_set,
-		    write.dst_binding,
-		    write.descriptor_type,
-		    write.descriptor_count,
-		);
-	    }
-	}
-	unsafe {
-	    set.device.device.update_descriptor_sets(&writes, &[]);
-	}
+    fn add_dependency(&self, item: Rc<dyn DescriptorRef>) {
+	self.dependencies.borrow_mut().push(item);
     }
 }
 
@@ -602,5 +581,15 @@ impl Drop for DescriptorSet {
     fn drop(&mut self) {
 	// Drop has been implemented solely so that DescriptorSets can be recorded as
 	// dependencies for CommandBuffers.
+    }
+}
+
+impl std::fmt::Debug for DescriptorSet {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("DescriptorSet")
+            .field("device", &self.device)
+            .field("inner", &self.inner)
+	    .field("dependencies", &format!("[{} items]", self.dependencies.borrow().len()))
+            .finish()
     }
 }

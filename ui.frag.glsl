@@ -2,10 +2,7 @@
 
 #extension GL_ARB_separate_shader_objects : enable
 
-layout (set = 0, binding = 0, std140) uniform UniformBufferObject {
-    vec4 tint;
-} global_ubo;
-layout (set = 0, binding = 1) uniform sampler2D ui_texture;
+layout (set = 0, binding = 0) uniform sampler2D ui_texture;
 
 layout (location = 0) in VS_OUT {
   vec2 pos;
@@ -17,5 +14,5 @@ layout (location = 0) out vec4 out_color;
 
 void main() {
   vec4 tex_color = texture(ui_texture, fs_in.uv);
-  out_color = tex_color * fs_in.color * global_ubo.tint;
+  out_color = tex_color * fs_in.color;
 }

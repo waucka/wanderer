@@ -184,18 +184,18 @@ impl<V: Vertex + 'static> StaticGeometryRenderer<V> {
 	    (samplers, textures_color, textures_normal, textures_props)
 	};
 
-	let mut items: Vec<Box<dyn DescriptorRef>> = vec![
-	    Box::new(UniformBufferRef::new(vec![Rc::clone(&uniform_buffer)])),
+	let mut items: Vec<Rc<dyn DescriptorRef>> = vec![
+	    Rc::new(UniformBufferRef::new(vec![Rc::clone(&uniform_buffer)])),
 	];
-	items.push(Box::new(CombinedRef::new_per(
+	items.push(Rc::new(CombinedRef::new_per(
 	    samplers.clone(),
 	    textures_color.clone(),
 	)?));
-	items.push(Box::new(CombinedRef::new_per(
+	items.push(Rc::new(CombinedRef::new_per(
 	    samplers.clone(),
 	    textures_normal.clone(),
 	)?));
-	items.push(Box::new(CombinedRef::new_per(
+	items.push(Rc::new(CombinedRef::new_per(
 	    samplers.clone(),
 	    textures_props.clone(),
 	)?));
@@ -298,8 +298,8 @@ impl<V: Vertex + 'static> StaticGeometryRenderer<V> {
 	    }),
 	)?);
 
-	let items: Vec<Box<dyn DescriptorRef>> = vec![
-	    Box::new(UniformBufferRef::new(vec![Rc::clone(&uniform_buffer)])),
+	let items: Vec<Rc<dyn DescriptorRef>> = vec![
+	    Rc::new(UniformBufferRef::new(vec![Rc::clone(&uniform_buffer)])),
 	];
 
 	if DEBUG_DESCRIPTOR_SETS {

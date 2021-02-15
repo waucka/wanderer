@@ -58,6 +58,12 @@ impl Texture {
 	    Image::copy_buffer_no_deps(&upload_buffer, &image)?;
 	}
 
+	image.transition_layout(
+            vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+            vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
+            mip_levels,
+	)?;
+
         let image_view = Rc::new(ImageView::from_image(
             &image,
             vk::ImageAspectFlags::COLOR,

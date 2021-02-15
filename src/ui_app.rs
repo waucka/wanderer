@@ -1,15 +1,14 @@
 use ash::vk;
 use memoffset::offset_of;
-use glsl_layout::AsStd140;
 
 use std::cell::RefCell;
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::path::Path;
 use std::rc::Rc;
 use std::sync::Arc;
 
 use super::support::{Device, PerFrameSet, FrameId, Queue};
-use super::support::buffer::{VertexBuffer, IndexBuffer, UniformBuffer};
+use super::support::buffer::{VertexBuffer, IndexBuffer};
 use super::support::command_buffer::{SecondaryCommandBuffer, CommandPool};
 use super::support::descriptor::{
     DescriptorBindings,
@@ -17,13 +16,11 @@ use super::support::descriptor::{
     DescriptorSetLayout,
     DescriptorSet,
     DescriptorRef,
-    UniformBufferRef,
     CombinedRef,
 };
 use super::support::renderer::{Pipeline, PipelineParameters, RenderPass};
 use super::support::shader::{VertexShader, FragmentShader};
 use super::support::texture::{Texture, Sampler};
-use super::utils::{Vector4f};
 
 const DEBUG_DESCRIPTOR_SETS: bool = false;
 
@@ -185,92 +182,75 @@ impl Painting {
     }
 }
 
-#[derive(Debug, Default, Clone, Copy, AsStd140)]
-pub struct UIUniform {
-    tint: Vector4f,
-}
-
 struct RenderingSet {
     vertex_buffer: Rc<VertexBuffer<egui::paint::tessellator::Vertex>>,
     index_buffer: Rc<IndexBuffer>,
     descriptor_set: Rc<DescriptorSet>,
 }
 
-struct UIRenderingData {
+struct FrameData {
     rendering_sets: Vec<RenderingSet>,
+    sampler: Rc<Sampler>,
     texture: Rc<Texture>,
     texture_version: u64,
 }
 
-struct FrameData {
-    rendering_data: Option<UIRenderingData>,
-    uniform_buffer: Rc<UniformBuffer<UIUniform>>,
-    command_buffer: RefCell<Rc<SecondaryCommandBuffer>>,
-}
-
 impl FrameData {
-    fn write_command_buffer(
+    fn create_command_buffer(
 	&self,
+	device: &Device,
+	pool: Rc<CommandPool>,
 	render_pass: &RenderPass,
 	subpass: u32,
 	pipeline: &Rc<Pipeline<egui::paint::tessellator::Vertex>>,
-    ) -> anyhow::Result<()> {
-	// reset() waits for the buffer to leave the Pending state.
-	self.command_buffer.borrow().reset()?;
-	// TODO: does this actually have to be a RefCell?
-	// TODO: should these be one-time submit?
-	//       One-time submit would make a lot of sense if we were
-	//       rendering the UI to a texture and compositing it.
-	//       In that case, we would only execute a command buffer
-	//       if the texture needed to be updated.  Each command buffer
-	//       would only be run once.
-	self.command_buffer.borrow().record(
-	    vk::CommandBufferUsageFlags::RENDER_PASS_CONTINUE,
+    ) -> anyhow::Result<Rc<SecondaryCommandBuffer>> {
+	let command_buffer = SecondaryCommandBuffer::new(
+	    device,
+	    Rc::clone(&pool),
+	)?;
+
+	command_buffer.record(
+	    vk::CommandBufferUsageFlags::RENDER_PASS_CONTINUE |
+	    vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT,
 	    render_pass,
 	    subpass,
 	    |writer| {
 		writer.join_render_pass(
 		    |rp_writer| {
-			match &self.rendering_data {
-			    Some(ref rendering_data) => {
-				rp_writer.bind_pipeline(Rc::clone(pipeline));
+			rp_writer.bind_pipeline(Rc::clone(pipeline));
 
-				for rs in &rendering_data.rendering_sets {
-				    let descriptor_sets = [
-					Rc::clone(&rs.descriptor_set),
-				    ];
+			for rs in &self.rendering_sets {
+			    let descriptor_sets = [
+				Rc::clone(&rs.descriptor_set),
+			    ];
 
-				    if DEBUG_DESCRIPTOR_SETS {
-					println!("Binding descriptor sets...");
-					println!("\tSet 0: {:?}", descriptor_sets[0]);
-				    }
+			    if DEBUG_DESCRIPTOR_SETS {
+				println!("Binding descriptor sets...");
+				println!("\tSet 0: {:?}", descriptor_sets[0]);
+			    }
 
-				    rp_writer.bind_descriptor_sets(pipeline.get_layout(), &descriptor_sets);
-				    rp_writer.draw_indexed(
-					Rc::clone(&rs.vertex_buffer),
-					Rc::clone(&rs.index_buffer),
-				    );
-				}
-			    },
-			    None => (),
-			};
+			    rp_writer.bind_descriptor_sets(pipeline.get_layout(), &descriptor_sets);
+			    rp_writer.draw_indexed(
+				Rc::clone(&rs.vertex_buffer),
+				Rc::clone(&rs.index_buffer),
+			    );
+			}
 
 			Ok(())
 		    },
 		)
 	    },
-	)
+	)?;
+	Ok(command_buffer)
     }
 }
 
 pub struct UIAppRenderer {
-    frame_data: PerFrameSet<FrameData>,
+    frame_data: VecDeque<FrameData>,
     descriptor_pools: PerFrameSet<DescriptorPool>,
     descriptor_set_layout: DescriptorSetLayout,
     command_pool: Rc<CommandPool>,
-    sampler: Rc<Sampler>,
     pipeline: Rc<Pipeline<egui::paint::tessellator::Vertex>>,
-    uniform: UIUniform,
 }
 
 impl UIAppRenderer {
@@ -287,12 +267,8 @@ impl UIAppRenderer {
 	let descriptor_pools = {
 	    let mut pool_sizes: HashMap<vk::DescriptorType, u32> = HashMap::new();
 	    pool_sizes.insert(
-		vk::DescriptorType::UNIFORM_BUFFER,
-		Self::POOL_SIZE / 2,
-	    );
-	    pool_sizes.insert(
 		vk::DescriptorType::COMBINED_IMAGE_SAMPLER,
-		Self::POOL_SIZE / 2,
+		Self::POOL_SIZE,
 	    );
 	    PerFrameSet::new(|_| {
 		DescriptorPool::new(
@@ -305,19 +281,12 @@ impl UIAppRenderer {
 
 	let descriptor_bindings = DescriptorBindings::new()
 	    .with_binding(
-		vk::DescriptorType::UNIFORM_BUFFER,
-		1,
-		vk::ShaderStageFlags::ALL,
-		false,
-	    )
-	    .with_binding(
 		vk::DescriptorType::COMBINED_IMAGE_SAMPLER,
 		1,
 		vk::ShaderStageFlags::ALL,
 		false,
 	    );
 
-	//TODO: need to set this up for "render stuff uploaded during previous frame" workflow!
 	let descriptor_set_layout = DescriptorSetLayout::new(
 	    device,
 	    descriptor_bindings,
@@ -352,9 +321,31 @@ impl UIAppRenderer {
 	let command_pool = CommandPool::new(
 	    device,
 	    graphics_queue,
-	    true,
+	    false,
 	    true,
 	)?;
+
+	let frame_data = VecDeque::new();
+
+	Ok(Self{
+	    frame_data,
+	    descriptor_pools,
+	    descriptor_set_layout,
+	    command_pool,
+	    pipeline,
+	})
+    }
+
+    // TODO: texture management needs refinement.  For example, Triangles has a texture_id member.
+    pub fn add_frame_data(
+	&mut self,
+	device: &Device,
+	frame: FrameId,
+	jobs: &egui::paint::tessellator::PaintJobs,
+	egui_texture: &Arc<egui::paint::Texture>
+    ) -> anyhow::Result<()> {
+	self.descriptor_pools.get_mut(frame).reset()?;
+
 
 	let sampler = Rc::new(Sampler::new(
 	    device,
@@ -364,68 +355,24 @@ impl UIAppRenderer {
 	    vk::SamplerMipmapMode::NEAREST,
 	    vk::SamplerAddressMode::REPEAT,
 	)?);
-
-	let frame_data = PerFrameSet::new(
-	    |_frame| {
-		let command_buffer = SecondaryCommandBuffer::new(
-		    device,
-		    Rc::clone(&command_pool),
-		)?;
-		let frame_data = FrameData{
-		    rendering_data: None,
-		    uniform_buffer: Rc::new(UniformBuffer::new(device, None)?),
-		    command_buffer: RefCell::new(command_buffer),
-		};
-		frame_data.write_command_buffer(
-		    render_pass,
-		    subpass,
-		    &pipeline,
-		)?;
-		Ok(frame_data)
-	    },
-	)?;
-
-	Ok(Self{
-	    frame_data,
-	    descriptor_pools,
-	    descriptor_set_layout,
-	    command_pool,
-	    sampler,
-	    pipeline,
-	    uniform: UIUniform {
-		tint: Vector4f::from([1.0, 1.0, 1.0, 1.0]),
-	    },
-	})
-    }
-
-    // TODO: texture management needs refinement.  For example, Triangles has a texture_id member.
-    fn set_app_data(
-	&mut self,
-	device: &Device,
-	frame: FrameId,
-	jobs: &egui::paint::tessellator::PaintJobs,
-	egui_texture: &Arc<egui::paint::Texture>
-    ) -> anyhow::Result<()> {
-	let frame_data = self.frame_data.get_mut(frame);
-
 	let texture = Rc::new(Texture::from_egui(
 	    device,
 	    egui_texture,
 	)?);
+
 	let mut rendering_sets = vec![];
 	for (_, triangles) in jobs.iter() {
 	    let vertex_buffer = Rc::new(VertexBuffer::new(device, &triangles.vertices)?);
 	    let index_buffer = Rc::new(IndexBuffer::new(device, &triangles.indices)?);
-	    let items: Vec<Box<dyn DescriptorRef>> = vec![
-		Box::new(UniformBufferRef::new(vec![Rc::clone(&frame_data.uniform_buffer)])),
-		Box::new(CombinedRef::new(
-		    Rc::clone(&self.sampler),
+	    let items: Vec<Rc<dyn DescriptorRef>> = vec![
+		Rc::new(CombinedRef::new(
+		    Rc::clone(&sampler),
 		    vec![Rc::clone(&texture)],
 		)),
 	    ];
 
 	    if DEBUG_DESCRIPTOR_SETS {
-		println!("Creating type descriptor set with {} items...", items.len());
+		println!("Creating app descriptor set with {} items...", items.len());
 	    }
 	    let sets = self.descriptor_pools.get_mut(frame).create_descriptor_sets(
 		1,
@@ -439,8 +386,9 @@ impl UIAppRenderer {
 	    });
 	}
 
-	frame_data.rendering_data = Some(UIRenderingData{
+	self.frame_data.push_back(FrameData{
 	    rendering_sets,
+	    sampler,
 	    texture,
 	    texture_version: egui_texture.version,
 	});
@@ -448,92 +396,73 @@ impl UIAppRenderer {
 	Ok(())
     }
 
-    pub fn update_app_data(
-	&mut self,
-	device: &Device,
-	frame: FrameId,
-	jobs: &egui::paint::tessellator::PaintJobs,
-	egui_texture: &Arc<egui::paint::Texture>,
-	render_pass: &RenderPass,
-	subpass: u32,
-    ) -> anyhow::Result<()> {
-	let uniform_buffer = Rc::clone(&self.frame_data.get_mut(frame).uniform_buffer);
-	match &mut self.frame_data.get_mut(frame).rendering_data {
-	    None => {
-		self.set_app_data(
-		    device,
-		    frame,
-		    jobs,
-		    egui_texture,
-		)?;
-		Ok(())
-	    },
-	    Some(ref mut rendering_data) => {
-		if rendering_data.texture_version != egui_texture.version {
-		    rendering_data.texture = Rc::new(Texture::from_egui(
-			device,
-			egui_texture,
-		    )?);
-		}
-
-		// TODO: reuse the buffers if possible
-		let mut rendering_sets = vec![];
-		for (_, triangles) in jobs.iter() {
-		    let vertex_buffer = Rc::new(VertexBuffer::new(device, &triangles.vertices)?);
-		    let index_buffer = Rc::new(IndexBuffer::new(device, &triangles.indices)?);
-
-		    let items: Vec<Box<dyn DescriptorRef>> = vec![
-			Box::new(UniformBufferRef::new(vec![
-			    Rc::clone(&uniform_buffer),
-			])),
-			Box::new(CombinedRef::new(
-			    Rc::clone(&self.sampler),
-			    vec![Rc::clone(&rendering_data.texture)],
-			)),
-		    ];
-
-		    if DEBUG_DESCRIPTOR_SETS {
-			println!("Creating type descriptor sets with {} items...", items.len());
-		    }
-		    let sets = self.descriptor_pools.get_mut(frame).create_descriptor_sets(
-			1,
-			&self.descriptor_set_layout,
-			&items,
-		    )?;
-		    rendering_sets.push(RenderingSet{
-			vertex_buffer,
-			index_buffer,
-			descriptor_set: Rc::clone(&sets[0]),
-		    });
-		}
-		rendering_data.rendering_sets = rendering_sets;
-		Ok(())
-	    },
-	}
+    pub fn clear_frame_data(&mut self) {
+	self.frame_data.clear();
     }
 
-    // TODO: should this also target the next frame?
-    pub fn remove_app_data(&mut self, frame: FrameId) {
-	self.frame_data.get_mut(frame).rendering_data = None;
-    }
-
-    pub fn get_command_buffer(
+    fn create_blank_command_buffer(
 	&self,
-	frame: FrameId,
+	device: &Device,
 	render_pass: &RenderPass,
 	subpass: u32,
     ) -> anyhow::Result<Rc<SecondaryCommandBuffer>> {
-	let pipeline = &self.pipeline;
-	self.frame_data.get(frame).write_command_buffer(
+	let command_buffer = SecondaryCommandBuffer::new(
+	    device,
+	    Rc::clone(&self.command_pool),
+	)?;
+
+	command_buffer.record(
+	    vk::CommandBufferUsageFlags::RENDER_PASS_CONTINUE |
+	    vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT,
 	    render_pass,
 	    subpass,
-	    pipeline,
+	    |writer| {
+		writer.join_render_pass(
+		    |_rp_writer| {
+			Ok(())
+		    }
+		)
+	    }
 	)?;
-	Ok(Rc::clone(&self.frame_data.get(frame).command_buffer.borrow()))
+	Ok(command_buffer)
     }
 
-    pub fn sync_uniform_buffers(&self, frame: FrameId) -> anyhow::Result<()> {
-	self.frame_data.get(frame).uniform_buffer.update(&self.uniform)
+    pub fn create_command_buffer(
+	&mut self,
+	device: &Device,
+	render_pass: &RenderPass,
+	subpass: u32,
+    ) -> anyhow::Result<Rc<SecondaryCommandBuffer>> {
+	if self.frame_data.len() < 2 {
+	    // Don't use data that might not have been uploaded yet.
+	    // This should only happen on the first frame after starting.
+	    return self.create_blank_command_buffer(
+		device,
+		render_pass,
+		subpass,
+	    );
+	}
+
+	// By popping the frame data, we should ensure that all frame dependencies get
+	// dropped when the command buffer goes away.
+	// Everything that needs to stick around *should* be listed as a dependency of
+	// the command buffer, so it won't be dropped until the command buffer is.
+	match self.frame_data.pop_front() {
+	    Some(command_buffer) => command_buffer.create_command_buffer(
+		device,
+		Rc::clone(&self.command_pool),
+		render_pass,
+		subpass,
+		&self.pipeline,
+	    ),
+	    None => {
+		self.create_blank_command_buffer(
+		    device,
+		    render_pass,
+		    subpass,
+		)
+	    },
+	}
     }
 
     pub fn update_pipeline_viewport(
