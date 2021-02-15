@@ -6,8 +6,8 @@ use glsl_layout::AsStd140;
 use std::rc::Rc;
 use std::ptr;
 
-use super::{Device, InnerDevice, Queue};
-use super::command_buffer::CommandBuffer;
+use super::{Device, InnerDevice};
+use super::command_buffer::{CommandBuffer, CommandPool};
 
 pub trait HasBuffer {
     fn get_buffer(&self) -> vk::Buffer;
@@ -126,7 +126,7 @@ impl Buffer {
     pub fn copy(
         src_buffer: Rc<Buffer>,
         dst_buffer: Rc<Buffer>,
-	queue: Rc<Queue>,
+	pool: Rc<CommandPool>,
     ) -> anyhow::Result<()> {
 	if src_buffer.size > dst_buffer.size {
 	    return Err(anyhow!(
@@ -137,7 +137,7 @@ impl Buffer {
 	}
         CommandBuffer::run_oneshot_internal(
 	   src_buffer.device.clone(),
-	    queue,
+	    pool,
 	    |writer| {
 		let copy_regions = [vk::BufferCopy{
 		    src_offset: 0,
@@ -246,7 +246,7 @@ impl<T> VertexBuffer<T> {
 	Buffer::copy(
 	    Rc::clone(&upload_buffer.buf),
 	    Rc::clone(&vertex_buffer),
-	    device.inner.get_default_transfer_queue(),
+	    device.inner.get_default_transfer_pool(),
 	)?;
 
 	Ok(Self{
@@ -300,7 +300,7 @@ impl IndexBuffer {
 	Buffer::copy(
 	    Rc::clone(&upload_buffer.buf),
 	    Rc::clone(&index_buffer),
-	    device.inner.get_default_transfer_queue(),
+	    device.inner.get_default_transfer_pool(),
 	)?;
 
 	Ok(Self{

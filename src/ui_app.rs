@@ -5,14 +5,12 @@ use glsl_layout::AsStd140;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::path::Path;
-use std::ptr;
 use std::rc::Rc;
 use std::sync::Arc;
 
-use super::scene::Renderable;
-use super::support::{Device, PerFrameSet, FrameId};
+use super::support::{Device, PerFrameSet, FrameId, Queue};
 use super::support::buffer::{VertexBuffer, IndexBuffer, UniformBuffer};
-use super::support::command_buffer::SecondaryCommandBuffer;
+use super::support::command_buffer::{SecondaryCommandBuffer, CommandPool};
 use super::support::descriptor::{
     DescriptorBindings,
     DescriptorPool,
@@ -217,9 +215,15 @@ impl FrameData {
 	subpass: u32,
 	pipeline: &Rc<Pipeline<egui::paint::tessellator::Vertex>>,
     ) -> anyhow::Result<()> {
-	// reset() waits for the buffer to enter the pending state.
+	// reset() waits for the buffer to leave the Pending state.
 	self.command_buffer.borrow().reset()?;
 	// TODO: does this actually have to be a RefCell?
+	// TODO: should these be one-time submit?
+	//       One-time submit would make a lot of sense if we were
+	//       rendering the UI to a texture and compositing it.
+	//       In that case, we would only execute a command buffer
+	//       if the texture needed to be updated.  Each command buffer
+	//       would only be run once.
 	self.command_buffer.borrow().record(
 	    vk::CommandBufferUsageFlags::RENDER_PASS_CONTINUE,
 	    render_pass,
@@ -263,6 +267,7 @@ pub struct UIAppRenderer {
     frame_data: PerFrameSet<FrameData>,
     descriptor_pools: PerFrameSet<DescriptorPool>,
     descriptor_set_layout: DescriptorSetLayout,
+    command_pool: Rc<CommandPool>,
     sampler: Rc<Sampler>,
     pipeline: Rc<Pipeline<egui::paint::tessellator::Vertex>>,
     uniform: UIUniform,
@@ -277,6 +282,7 @@ impl UIAppRenderer {
 	window_height: usize,
 	render_pass: &RenderPass,
 	subpass: u32,
+	graphics_queue: Rc<Queue>,
     ) -> anyhow::Result<Self> {
 	let descriptor_pools = {
 	    let mut pool_sizes: HashMap<vk::DescriptorType, u32> = HashMap::new();
@@ -342,7 +348,13 @@ impl UIAppRenderer {
 		.with_front_face(vk::FrontFace::COUNTER_CLOCKWISE)
 		.with_subpass(subpass),
 	)?);
-	    
+
+	let command_pool = CommandPool::new(
+	    device,
+	    graphics_queue,
+	    true,
+	    true,
+	)?;
 
 	let sampler = Rc::new(Sampler::new(
 	    device,
@@ -357,7 +369,7 @@ impl UIAppRenderer {
 	    |_frame| {
 		let command_buffer = SecondaryCommandBuffer::new(
 		    device,
-		    device.get_default_graphics_queue(),
+		    Rc::clone(&command_pool),
 		)?;
 		let frame_data = FrameData{
 		    rendering_data: None,
@@ -377,6 +389,7 @@ impl UIAppRenderer {
 	    frame_data,
 	    descriptor_pools,
 	    descriptor_set_layout,
+	    command_pool,
 	    sampler,
 	    pipeline,
 	    uniform: UIUniform {

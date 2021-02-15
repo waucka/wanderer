@@ -252,7 +252,7 @@ impl<V: Vertex + 'static> StaticGeometryRenderer<V> {
 	    |frame| {
 		let command_buffer = SecondaryCommandBuffer::new(
 		    device,
-		    device.get_default_graphics_queue(),
+		    device.get_default_graphics_pool(),
 		)?;
 		StaticGeometryRenderer::write_command_buffer(
 		    &command_buffer,
@@ -414,7 +414,7 @@ impl<V: Vertex + 'static> Renderable for StaticGeometryRenderer<V> {
 	    |frame, _| {
 		let command_buffer = SecondaryCommandBuffer::new(
 		    device,
-		    device.get_default_graphics_queue(),
+		    device.get_default_graphics_pool(),
 		)?;
 		StaticGeometryRenderer::write_command_buffer(
 		    &command_buffer,
@@ -510,7 +510,7 @@ impl PostProcessingStep {
 	    |frame| {
 		let command_buffer = SecondaryCommandBuffer::new(
 		    device,
-		    device.get_default_graphics_queue(),
+		    device.get_default_graphics_pool(),
 		)?;
 		PostProcessingStep::write_command_buffer(
 		    &command_buffer,
@@ -588,7 +588,7 @@ impl Renderable for PostProcessingStep {
 	    |frame, _| {
 		let command_buffer = SecondaryCommandBuffer::new(
 		    device,
-		    device.get_default_graphics_queue(),
+		    device.get_default_graphics_pool(),
 		)?;
 		PostProcessingStep::write_command_buffer(
 		    &command_buffer,

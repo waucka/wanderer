@@ -259,7 +259,7 @@ impl Presenter {
 	self.last_frame_duration = self.last_frame.elapsed();
         self.last_frame = Instant::now();
 	//println!("Presented frame in {}ns", start.elapsed().as_nanos());
-	self.current_frame.next();
+	self.current_frame.advance();
 	Ok(())
     }
 }

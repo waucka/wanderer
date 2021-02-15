@@ -194,7 +194,7 @@ impl Image {
     ) -> anyhow::Result<()> {
         CommandBuffer::run_oneshot_internal(
 	    self.device.clone(),
-	    self.device.get_default_graphics_queue(),
+	    self.device.get_default_graphics_pool(),
 	    |writer| {
 		let src_access_mask;
 		let dst_access_mask;
@@ -288,7 +288,7 @@ impl Image {
 	use std::cmp::max;
         super::command_buffer::CommandBuffer::run_oneshot_internal(
 	    Rc::clone(&self.device),
-	    self.device.get_default_transfer_queue(),
+	    self.device.get_default_transfer_pool(),
 	    |writer| {
 		let mut image_barrier = vk::ImageMemoryBarrier{
                     s_type: vk::StructureType::IMAGE_MEMORY_BARRIER,
@@ -417,7 +417,7 @@ impl Image {
     ) -> anyhow::Result<()> {
 	CommandBuffer::run_oneshot_internal(
 	    Rc::clone(&dst_img.device),
-	    dst_img.device.get_default_transfer_queue(),
+	    dst_img.device.get_default_transfer_pool(),
 	    |writer| {
 		writer.copy_buffer_to_image(
 		    Rc::clone(&buffer),
@@ -433,7 +433,7 @@ impl Image {
     ) -> anyhow::Result<()> {
 	CommandBuffer::run_oneshot_internal(
 	    Rc::clone(&dst_img.device),
-	    dst_img.device.get_default_transfer_queue(),
+	    dst_img.device.get_default_transfer_pool(),
 	    |writer| {
 		writer.copy_buffer_to_image_no_deps(
 		    buffer,

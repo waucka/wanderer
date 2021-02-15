@@ -123,6 +123,7 @@ impl UIManager {
 		window_height,
 		render_pass,
 		subpass,
+		device.get_default_graphics_queue(),
 	    )?,
 	    app: None,
 	    app_context: ui_app::AppContext::new(),
@@ -862,7 +863,7 @@ impl VulkanApp for VulkanApp21 {
 
 	let mut command_buffer = CommandBuffer::new(
 	    &self.device,
-	    self.device.get_default_graphics_queue(),
+	    self.device.get_default_graphics_pool(),
 	)?;
 	command_buffer.record(
 	    vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT,

@@ -49,6 +49,7 @@ pub mod texture;
 pub mod descriptor;
 
 use utils::Defaulted;
+use command_buffer::CommandPool;
 
 #[derive(Copy, Clone)]
 pub struct FrameId {
@@ -146,6 +147,7 @@ impl<T> PerFrameSet<T> {
 	Ok(new_set)
     }
 
+    #[allow(unused)]
     pub fn foreach<F>(&mut self, mut action: F) -> anyhow::Result<()>
     where
         F: FnMut(FrameId, &mut T) -> anyhow::Result<()>
@@ -503,13 +505,11 @@ pub const ENGINE_VERSION: u32 = vk::make_version(0, 1, 0);
 pub const VULKAN_API_VERSION: u32 = vk::make_version(1, 2, 131);
 
 pub struct Queue {
-    device: Rc<InnerDevice>,
     family_idx: u32,
     queue_idx: u32,
     flags: vk::QueueFlags,
     can_present: bool,
     queue: vk::Queue,
-    command_pool: vk::CommandPool,
 }
 
 impl Queue {
@@ -523,25 +523,13 @@ impl Queue {
 	let queue = unsafe {
 	    device.device.get_device_queue(family_idx, queue_idx)
 	};
-	let command_pool_create_info = vk::CommandPoolCreateInfo{
-            s_type: vk::StructureType::COMMAND_POOL_CREATE_INFO,
-            p_next: ptr::null(),
-            flags: vk::CommandPoolCreateFlags::empty(),
-            queue_family_index: family_idx,
-	};
-
-	let command_pool = unsafe {
-            device.device.create_command_pool(&command_pool_create_info, None)?
-	};
 
 	Ok(Self{
-	    device,
 	    family_idx,
 	    queue_idx,
 	    flags,
 	    can_present,
 	    queue,
-	    command_pool,
 	})
     }
 
@@ -578,14 +566,6 @@ impl std::cmp::PartialEq for Queue {
     }
 }
 impl std::cmp::Eq for Queue {}
-
-impl Drop for Queue {
-    fn drop(&mut self) {
-	unsafe {
-	    self.device.device.destroy_command_pool(self.command_pool, None);
-	}
-    }
-}
 
 pub struct DeviceBuilder {
     window_title: Defaulted<String>,
@@ -718,14 +698,21 @@ impl Device {
 	self.inner.get_default_graphics_queue()
     }
 
+    pub fn get_default_graphics_pool(&self) -> Rc<CommandPool> {
+	self.inner.get_default_graphics_pool()
+    }
+
     #[allow(unused)]
     pub fn get_default_present_queue(&self) -> Rc<Queue> {
 	self.inner.get_default_present_queue()
     }
 
-    #[allow(unused)]
     pub fn get_default_transfer_queue(&self) -> Rc<Queue> {
 	self.inner.get_default_transfer_queue()
+    }
+
+    pub fn get_default_transfer_pool(&self) -> Rc<CommandPool> {
+	self.inner.get_default_transfer_pool()
     }
 
     #[allow(unused)]
@@ -740,6 +727,7 @@ impl Device {
 
 struct QueueSet {
     queues: Vec<Rc<Queue>>,
+    pools: Vec<Rc<CommandPool>>,
     // These three are indexes into the above vector ("queues").
     default_graphics_queue_idx: usize,
     default_present_queue_idx: usize,
@@ -836,6 +824,7 @@ impl InnerDevice {
             device: device.clone(),
 	    queue_set: RefCell::new(QueueSet {
 		queues: Vec::new(),
+		pools: Vec::new(),
 		default_graphics_queue_idx: 0,
 		default_present_queue_idx: 0,
 		default_transfer_queue_idx: 0,
@@ -870,7 +859,18 @@ impl InnerDevice {
 		    _ => panic!("Unable to create all three of: graphics queue, present queue, transfer queue!"),
 		};
 
+	    let mut pools = Vec::new();
+	    for q in queues.iter() {
+		pools.push(CommandPool::from_inner(
+		    Rc::clone(&this),
+		    Rc::clone(q),
+		    false,
+		    false,
+		)?);
+	    }
+
 	    queue_set.queues = queues;
+	    queue_set.pools = pools;
 	    queue_set.default_graphics_queue_idx = default_graphics_queue_idx;
 	    queue_set.default_present_queue_idx = default_present_queue_idx;
 	    queue_set.default_transfer_queue_idx = default_transfer_queue_idx;
@@ -881,19 +881,28 @@ impl InnerDevice {
 
     fn get_default_graphics_queue(&self) -> Rc<Queue> {
 	let queue_set = self.queue_set.borrow();
-	queue_set.queues[queue_set.default_graphics_queue_idx].clone()
+	Rc::clone(&queue_set.queues[queue_set.default_graphics_queue_idx])
+    }
+
+    fn get_default_graphics_pool(&self) -> Rc<CommandPool> {
+	let queue_set = self.queue_set.borrow();
+	Rc::clone(&queue_set.pools[queue_set.default_graphics_queue_idx])
     }
 
     #[allow(unused)]
     fn get_default_present_queue(&self) -> Rc<Queue> {
 	let queue_set = self.queue_set.borrow();
-	queue_set.queues[queue_set.default_present_queue_idx].clone()
+	Rc::clone(&queue_set.queues[queue_set.default_present_queue_idx])
     }
 
-    #[allow(unused)]
     fn get_default_transfer_queue(&self) -> Rc<Queue> {
 	let queue_set = self.queue_set.borrow();
-	queue_set.queues[queue_set.default_transfer_queue_idx].clone()
+	Rc::clone(&queue_set.queues[queue_set.default_transfer_queue_idx])
+    }
+
+    fn get_default_transfer_pool(&self) -> Rc<CommandPool> {
+	let queue_set = self.queue_set.borrow();
+	Rc::clone(&queue_set.pools[queue_set.default_transfer_queue_idx])
     }
 
     fn query_swapchain_support(&self) -> SwapChainSupport {
