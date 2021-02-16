@@ -37,7 +37,7 @@ impl Texture {
 	    ImageBuilder::new2d(image_width as usize, image_height as usize)
 		.with_mip_levels(mip_levels)
 		.with_num_samples(vk::SampleCountFlags::TYPE_1)
-		.with_format(vk::Format::R8G8B8A8_SRGB)
+		.with_format(vk::Format::R8_UNORM)
 		.with_tiling(vk::ImageTiling::OPTIMAL)
 		.with_usage(
 		    vk::ImageUsageFlags::TRANSFER_SRC |
