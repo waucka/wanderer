@@ -313,7 +313,7 @@ impl UIAppRenderer {
 	    frag_shader,
 	    &set_layouts,
 	    PipelineParameters::new()
-		.with_cull_mode(vk::CullModeFlags::FRONT)
+		.with_cull_mode(vk::CullModeFlags::NONE)
 		.with_front_face(vk::FrontFace::COUNTER_CLOCKWISE)
 		.with_subpass(subpass),
 	)?);
