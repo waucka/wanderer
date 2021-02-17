@@ -23,7 +23,7 @@ use super::support::descriptor::{
 use super::support::renderer::{Pipeline, PipelineParameters, RenderPass};
 use super::support::shader::{VertexShader, FragmentShader};
 use super::support::texture::{Texture, Sampler};
-use super::utils::Vector2f;
+use super::utils::{Vector2f, Vector4f};
 
 const DEBUG_DESCRIPTOR_SETS: bool = false;
 
@@ -58,19 +58,152 @@ impl AppContext {
     }
 }
 
-pub struct UniformTwiddler {
-    label: RefCell<String>,
-    value: RefCell<f32>,
-    painting: RefCell<Painting>,
+pub enum UniformDataVar {
+    Bool(bool),
+    UInt(u32),
+    SFloat(f32),
+    Vec2(Vector2f),
+    Vec4(Vector4f),
 }
 
-impl Default for UniformTwiddler {
-    fn default() -> Self {
+pub trait UniformDataItem {
+    fn ui(&mut self, ui: &mut egui::Ui);
+    fn get_value(&self) -> UniformDataVar;
+}
+
+pub struct UniformDataItemBool {
+    value: bool,
+}
+
+impl UniformDataItemBool {
+    pub fn new(value: bool) -> Self {
 	Self{
-	    label: RefCell::new("Hello World!".to_owned()),
-	    value: RefCell::new(2.7),
-	    painting: RefCell::new(Default::default()),
+	    value,
 	}
+    }
+}
+
+impl UniformDataItem for UniformDataItemBool {
+    fn ui(&mut self, ui: &mut egui::Ui) {
+	ui.checkbox(&mut self.value, "");
+    }
+
+    fn get_value(&self) -> UniformDataVar {
+	UniformDataVar::Bool(self.value)
+    }
+}
+
+pub struct UniformDataItemSliderUInt {
+    value: u32,
+    range: core::ops::RangeInclusive<u32>,
+}
+
+impl UniformDataItemSliderUInt {
+    pub fn new(value: u32, range: core::ops::RangeInclusive<u32>) -> Self {
+	Self{
+	    value,
+	    range,
+	}
+    }
+}
+
+impl UniformDataItem for UniformDataItemSliderUInt {
+    fn ui(&mut self, ui: &mut egui::Ui) {
+	ui.add(egui::Slider::u32(&mut self.value, self.range.clone()));
+    }
+
+    fn get_value(&self) -> UniformDataVar {
+	UniformDataVar::UInt(self.value)
+    }
+}
+
+pub struct UniformDataItemSliderSFloat {
+    value: f32,
+    range: core::ops::RangeInclusive<f32>,
+}
+
+impl UniformDataItemSliderSFloat {
+    pub fn new(value: f32, range: core::ops::RangeInclusive<f32>) -> Self {
+	Self{
+	    value,
+	    range,
+	}
+    }
+}
+
+impl UniformDataItem for UniformDataItemSliderSFloat {
+    fn ui(&mut self, ui: &mut egui::Ui) {
+	ui.add(egui::Slider::f32(&mut self.value, self.range.clone()));
+    }
+
+    fn get_value(&self) -> UniformDataVar {
+	UniformDataVar::SFloat(self.value)
+    }
+}
+
+pub struct UniformDataItemRadio {
+    value: u32,
+    options: Vec<(String, u32)>,
+}
+
+impl UniformDataItemRadio {
+    pub fn new(value: u32, options: Vec<(String, u32)>) -> Self {
+	Self{
+	    value,
+	    options,
+	}
+    }
+}
+
+impl UniformDataItem for UniformDataItemRadio {
+    fn ui(&mut self, ui: &mut egui::Ui) {
+	ui.vertical(|ui| {
+	    for (opt_name, opt_value) in self.options.iter() {
+		ui.radio_value(&mut self.value, *opt_value, opt_name);
+	    }
+	});
+    }
+
+    fn get_value(&self) -> UniformDataVar {
+	UniformDataVar::UInt(self.value)
+    }
+}
+
+pub struct UniformData {
+    items: RefCell<HashMap<String, Box<dyn UniformDataItem>>>,
+}
+
+impl UniformData {
+    pub fn new(items: HashMap<String, Box<dyn UniformDataItem>>) -> Self {
+	Self{
+	    items: RefCell::new(items),
+	}
+    }
+
+    fn get_items_mut(&self) -> std::cell::RefMut<HashMap<String, Box<dyn UniformDataItem>>> {
+	self.items.borrow_mut()
+    }
+
+    pub fn get_items(&self) -> std::cell::Ref<HashMap<String, Box<dyn UniformDataItem>>> {
+	self.items.borrow()
+    }
+}
+
+pub struct UniformTwiddler {
+    title: String,
+    uniform_data: Rc<UniformData>,
+}
+
+impl UniformTwiddler {
+    pub fn new(title: &str, uniform_data: Rc<UniformData>) -> Self {
+	Self{
+	    title: title.to_owned(),
+	    uniform_data,
+	}
+    }
+
+    pub fn get_uniform_data(&self) -> Rc<UniformData> {
+	Rc::clone(&self.uniform_data)
     }
 }
 
@@ -80,114 +213,18 @@ impl UIApp for UniformTwiddler {
     }
 
     fn update(&self, ctx: &egui::CtxRef, app_ctx: &mut AppContext) {
-	// TODO: find a better way to accomplish this.
-	let mut label = self.label.borrow_mut();
-	let mut value = self.value.borrow_mut();
-	let mut painting = self.painting.borrow_mut();
-
-	egui::SidePanel::left("side_panel", 200.0).show(ctx, |ui| {
-	    ui.heading("Side Panel");
-
-	    ui.horizontal(|ui| {
-		ui.label("Write something: ");
-		ui.text_edit_singleline(&mut label);
-	    });
-
-	    ui.add(egui::Slider::f32(&mut value, 0.0..=10.0).text("value"));
-	    if ui.button("Increment").clicked {
-		*value += 1.0;
-	    }
-
-	    ui.with_layout(egui::Layout::bottom_up(egui::Align::Center), |ui| {
-		ui.add(
-		    egui::Hyperlink::new("https://github.com/emilk/egui").text("powered by egui"),
-		);
-	    });
-	});
-
-	egui::TopPanel::top("top_panel").show(ctx, |ui| {
-	    egui::menu::bar(ui, |ui| {
-		egui::menu::menu(ui, "File", |ui| {
-		    if ui.button("Quit").clicked {
-			app_ctx.signal_quit();
-		    }
-		});
-	    });
-	});
-
-	egui::CentralPanel::default().show(ctx, |ui| {
-	    ui.heading("Uniform Twiddler");
-	    egui::warn_if_debug_build(ui);
-
-	    ui.separator();
-
-	    ui.heading("Central Panel");
-	    ui.label("The central panel is the region left after adding TopPanels and SidePanels");
-	    ui.label("It is often a great place for big things, like drawings:");
-
-	    ui.heading("Draw with your mouse:");
-	    painting.ui_control(ui);
-	    egui::Frame::dark_canvas(ui.style()).show(ui, |ui| {
-		painting.ui_content(ui);
-	    });
-	});
-    }
-}
-
-struct Painting {
-    lines: Vec<Vec<egui::Vec2>>,
-    stroke: egui::Stroke,
-}
-
-impl Default for Painting {
-    fn default() -> Self {
-	Self{
-	    lines: Default::default(),
-	    stroke: egui::Stroke::new(1.0, egui::Color32::LIGHT_BLUE),
-	}
-    }
-}
-
-impl Painting {
-    pub fn ui_control(&mut self, ui: &mut egui::Ui) -> egui::Response {
-	ui.horizontal(|ui| {
-	    self.stroke.ui(ui, "Stroke");
-	    ui.separator();
-	    if ui.button("Clear Painting").clicked {
-		self.lines.clear()
-	    }
-	}).1
-    }
-
-    pub fn ui_content(&mut self, ui: &mut egui::Ui) -> egui::Response {
-	let (response, painter) = ui.allocate_painter(ui.available_size_before_wrap_finite(), egui::Sense::drag());
-	let rect = response.rect;
-
-	if self.lines.is_empty() {
-	    self.lines.push(vec![]);
-	}
-
-	let current_line = self.lines.last_mut().unwrap();
-
-	if response.active {
-	    if let Some(mouse_pos) = ui.input().mouse.pos {
-		let canvas_pos = mouse_pos - rect.min;
-		if current_line.last() != Some(&canvas_pos) {
-		    current_line.push(canvas_pos);
+	let mut items = self.uniform_data.get_items_mut();
+	egui::Window::new(&self.title)
+	    .scroll(true)
+	    .show(ctx, |ui| {
+		for (name, value) in items.iter_mut() {
+		    // TODO: switch to Grid after updating to egui 0.9
+		    ui.vertical(|ui| {
+			ui.label(name);
+			value.ui(ui);
+		    });
 		}
-	    }
-	} else if !current_line.is_empty() {
-	    self.lines.push(vec![]);
-	}
-
-	for line in &self.lines {
-	    if line.len() >= 2 {
-		let points: Vec<egui::Pos2> = line.iter().map(|p| rect.min + *p).collect();
-		painter.add(egui::PaintCmd::line(points, self.stroke));
-	    }
-	}
-
-	response
+	    });
     }
 }
 

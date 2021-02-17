@@ -74,6 +74,21 @@ struct UniformBufferObject {
     use_ao: glsl_layout::boolean,
 }
 
+impl UniformBufferObject {
+    fn get_twiddler_data(&self) -> Rc<ui_app::UniformData> {
+	let mut items: HashMap<String, Box<dyn ui_app::UniformDataItem>> = HashMap::new();
+	items.insert(
+	    "use_parallax".to_owned(),
+	    Box::new(ui_app::UniformDataItemBool::new(self.use_parallax.into())),
+	);
+	items.insert(
+	    "use_ao".to_owned(),
+	    Box::new(ui_app::UniformDataItemBool::new(self.use_ao.into())),
+	);
+	Rc::new(ui_app::UniformData::new(items))
+    }
+}
+
 #[derive(Debug, Default, Clone, Copy, AsStd140)]
 struct HdrControlUniform {
     #[allow(unused)]
@@ -278,9 +293,6 @@ impl VulkanApp21 {
 		.with_default_extensions()
         )?;
 
-	// Begin egui setup
-	let uniform_twiddler_app = Rc::new(Default::default());
-	// End egui setup
 	// TODO: figure out how to support MSAA for this engine or use FXAA or something
         let msaa_samples = vk::SampleCountFlags::TYPE_1;//device.get_max_usable_sample_count();
 	let (surface_format, depth_format) = Presenter::get_swapchain_image_formats(&device);
@@ -451,6 +463,15 @@ impl VulkanApp21 {
 	    use_parallax: true.into(),
 	    use_ao: true.into(),
 	};
+
+	// Begin egui setup
+	let uniform_twiddler_app = Rc::new(
+	    ui_app::UniformTwiddler::new(
+		"Global Uniform",
+		global_uniform.get_twiddler_data(),
+	    )
+	);
+	// End egui setup
 
 	let global_frame_data = PerFrameSet::new(
 	    |_| {
@@ -757,6 +778,21 @@ impl VulkanApp21 {
             );
 	    view_matrix.into()
 	};
+
+	let uniform_data = self.uniform_twiddler_app.get_uniform_data();
+	let items = uniform_data.get_items();
+
+	if let Some(item) = items.get("use_parallax") {
+	    if let ui_app::UniformDataVar::Bool(use_parallax) = item.get_value() {
+		uniform_transform.use_parallax = use_parallax.into();
+	    }
+	}
+
+	if let Some(item) = items.get("use_ao") {
+	    if let ui_app::UniformDataVar::Bool(use_ao) = item.get_value() {
+		uniform_transform.use_ao = use_ao.into();
+	    }
+	}
 
 	self.global_frame_data.get(frame).uniform_buffer.update(uniform_transform)?;
 	Ok(())
