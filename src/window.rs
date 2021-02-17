@@ -156,6 +156,7 @@ pub trait VulkanApp {
     fn set_z_speed(&mut self, speed: f32);
     fn toggle_uniform_twiddler(&mut self) -> bool;
     fn get_window_size(&self) -> (usize, usize);
+    fn get_window_scale(&self) -> f32;
 }
 
 fn mutually_exclusive(a: &mut bool, b: &mut bool) {
@@ -323,6 +324,18 @@ pub fn main_loop<A: 'static + VulkanApp>(event_loop: EventLoop<()>, mut vulkan_a
                         vulkan_app.wait_device_idle().unwrap();
                         *control_flow = ControlFlow::Exit;
                     },
+		    WindowEvent::CursorMoved { position, .. } => {
+			let scale = vulkan_app.get_window_scale();
+			raw_input.mouse_pos = Some(egui::math::Pos2{
+			    x: position.x as f32 / scale,
+			    y: position.y as f32 / scale,
+			});
+		    },
+		    WindowEvent::MouseInput { state, button, .. } => {
+			if button == winit::event::MouseButton::Left {
+			    raw_input.mouse_down = state == ElementState::Pressed;
+			}
+		    },
                     WindowEvent::KeyboardInput { input, .. } => {
                         match input {
                             KeyboardInput { virtual_keycode, state, .. } => {

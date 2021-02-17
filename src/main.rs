@@ -131,6 +131,10 @@ impl UIManager {
 	})
     }
 
+    pub fn get_window_scale(&self) -> f32 {
+	self.egui_ctx.pixels_per_point()
+    }
+
     pub fn update_app_data(
 	&mut self,
 	device: &Device,
@@ -972,6 +976,10 @@ impl VulkanApp for VulkanApp21 {
 
     fn get_window_size(&self) -> (usize, usize) {
 	self.device.get_window_size()
+    }
+
+    fn get_window_scale(&self) -> f32 {
+	self.ui_manager.get_window_scale()
     }
 }
 
