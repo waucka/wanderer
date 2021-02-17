@@ -49,10 +49,18 @@ impl EdgeTrigger for KeypressSentinel {
     }
 }
 
+struct KeyboardModifiers {
+    shift: bool,
+    ctrl: bool,
+    alt: bool,
+    logo: bool,
+}
+
 struct KeyboardState {
     edge_triggers: HashMap<VirtualKeyCode, Vec<(EdgeTriggerRef, Rc<dyn EdgeTrigger>)>>,
     keys_down: HashSet<VirtualKeyCode>,
     next_edge_trigger_id: u64,
+    modifiers: KeyboardModifiers,
 }
 
 impl KeyboardState {
@@ -61,6 +69,12 @@ impl KeyboardState {
 	    edge_triggers: HashMap::new(),
 	    keys_down: HashSet::new(),
 	    next_edge_trigger_id: 0,
+	    modifiers: KeyboardModifiers{
+		shift: false,
+		ctrl: false,
+		alt: false,
+		logo: false,
+	    },
 	}
     }
 
@@ -111,7 +125,27 @@ impl KeyboardState {
     }
 
     fn set_key_pressed(&mut self, key: VirtualKeyCode) {
-	self.keys_down.insert(key);
+	use VirtualKeyCode::*;
+	match key {
+	    // We use the modifiers field to track these.
+	    // We should be able to just use the "modifiers changed" event, but that
+	    // seems to be annoyingly laggy.
+	    LShift | RShift => {
+		self.modifiers.shift = true;
+	    },
+	    LControl | RControl => {
+		self.modifiers.ctrl = true;
+	    },
+	    LAlt | RAlt => {
+		self.modifiers.alt = true;
+	    },
+	    LWin | RWin => {
+		self.modifiers.logo = true;
+	    },
+	    _ => {
+		self.keys_down.insert(key);
+	    },
+	}
 	if let Some(triggers) = self.edge_triggers.get(&key) {
 	    for (_, trigger) in triggers {
 		trigger.pressed();
@@ -218,8 +252,9 @@ impl CameraMotionController {
 	self.move_down = false;
     }
 
-    fn process_keys(&mut self, keys: &HashSet<VirtualKeyCode>) {
-	if keys.contains(&VirtualKeyCode::LShift) {
+    fn process_keys(&mut self, keyboard_state: &KeyboardState) {
+	let keys = keyboard_state.get_down_keys();
+	if keyboard_state.modifiers.shift {
 	    self.speed_boost = true;
 	}
 
@@ -336,10 +371,34 @@ pub fn main_loop<A: 'static + VulkanApp>(event_loop: EventLoop<()>, mut vulkan_a
 			    raw_input.mouse_down = state == ElementState::Pressed;
 			}
 		    },
+		    WindowEvent::ModifiersChanged(state) => {
+			keyboard_state.modifiers.shift = state.shift();
+			keyboard_state.modifiers.ctrl = state.ctrl();
+			keyboard_state.modifiers.alt = state.alt();
+			keyboard_state.modifiers.logo = state.logo();
+		    },
                     WindowEvent::KeyboardInput { input, .. } => {
                         match input {
                             KeyboardInput { virtual_keycode, state, .. } => {
 				if let Some(key) = virtual_keycode {
+				    if let Some(egui_key) = convert_key_to_egui(key) {
+					raw_input.events.push(egui::Event::Key{
+					    key: egui_key,
+					    pressed: state == ElementState::Pressed,
+					    modifiers: egui::Modifiers{
+						alt: keyboard_state.modifiers.alt,
+						ctrl: keyboard_state.modifiers.ctrl,
+						shift: keyboard_state.modifiers.shift,
+						mac_cmd: is_mac_cmd_pressed(
+						    keyboard_state.modifiers.logo,
+						),
+						command: is_command_pressed(
+						    keyboard_state.modifiers.ctrl,
+						    keyboard_state.modifiers.logo,
+						),
+					    },
+					});
+				    }
 				    match state {
 					ElementState::Pressed => 
 					    keyboard_state.set_key_pressed(key),
@@ -361,7 +420,7 @@ pub fn main_loop<A: 'static + VulkanApp>(event_loop: EventLoop<()>, mut vulkan_a
                                 }
 
 				camera_controller.reset();
-				camera_controller.process_keys(keyboard_state.get_down_keys());
+				camera_controller.process_keys(&keyboard_state);
 
                                 let rotation_speed = if camera_controller.speed_boost {
                                     100.0
@@ -442,6 +501,7 @@ pub fn main_loop<A: 'static + VulkanApp>(event_loop: EventLoop<()>, mut vulkan_a
 			std::process::abort();
 		    }
 		}
+		raw_input.events.clear();
                 if PAINT_FPS_COUNTER {
                     println!("FPS: {}", vulkan_app.get_fps());
                 }
@@ -452,4 +512,82 @@ pub fn main_loop<A: 'static + VulkanApp>(event_loop: EventLoop<()>, mut vulkan_a
             _ => (),
         }
     })
+}
+
+fn convert_key_to_egui(key: VirtualKeyCode) -> Option<egui::Key> {
+    use egui::Key::*;
+    Some(match key {
+	VirtualKeyCode::Down => ArrowDown,
+	VirtualKeyCode::Left => ArrowLeft,
+	VirtualKeyCode::Right => ArrowRight,
+	VirtualKeyCode::Up => ArrowUp,
+	VirtualKeyCode::Escape => Escape,
+	VirtualKeyCode::Tab => Tab,
+	VirtualKeyCode::Back => Backspace,
+	VirtualKeyCode::Return => Enter,
+	VirtualKeyCode::Space => Space,
+	VirtualKeyCode::Insert => Insert,
+	VirtualKeyCode::Delete => Delete,
+	VirtualKeyCode::Home => Home,
+	VirtualKeyCode::End => End,
+	VirtualKeyCode::PageUp => PageUp,
+	VirtualKeyCode::PageDown => PageDown,
+	VirtualKeyCode::Key0 | VirtualKeyCode::Numpad0 => Num0,
+	VirtualKeyCode::Key1 | VirtualKeyCode::Numpad1 => Num1,
+	VirtualKeyCode::Key2 | VirtualKeyCode::Numpad2 => Num2,
+	VirtualKeyCode::Key3 | VirtualKeyCode::Numpad3 => Num3,
+	VirtualKeyCode::Key4 | VirtualKeyCode::Numpad4 => Num4,
+	VirtualKeyCode::Key5 | VirtualKeyCode::Numpad5 => Num5,
+	VirtualKeyCode::Key6 | VirtualKeyCode::Numpad6 => Num6,
+	VirtualKeyCode::Key7 | VirtualKeyCode::Numpad7 => Num7,
+	VirtualKeyCode::Key8 | VirtualKeyCode::Numpad8 => Num8,
+	VirtualKeyCode::Key9 | VirtualKeyCode::Numpad9 => Num9,
+	VirtualKeyCode::A => A,
+	VirtualKeyCode::B => B,
+	VirtualKeyCode::C => C,
+	VirtualKeyCode::D => D,
+	VirtualKeyCode::E => E,
+	VirtualKeyCode::F => F,
+	VirtualKeyCode::G => G,
+	VirtualKeyCode::H => H,
+	VirtualKeyCode::I => I,
+	VirtualKeyCode::J => J,
+	VirtualKeyCode::K => K,
+	VirtualKeyCode::L => L,
+	VirtualKeyCode::M => M,
+	VirtualKeyCode::N => N,
+	VirtualKeyCode::O => O,
+	VirtualKeyCode::P => P,
+	VirtualKeyCode::Q => Q,
+	VirtualKeyCode::R => R,
+	VirtualKeyCode::S => S,
+	VirtualKeyCode::T => T,
+	VirtualKeyCode::U => U,
+	VirtualKeyCode::V => V,
+	VirtualKeyCode::W => W,
+	VirtualKeyCode::X => X,
+	VirtualKeyCode::Y => Y,
+	VirtualKeyCode::Z => Z,
+	_ => return None,
+    })
+}
+
+#[cfg(target_os = "macos")]
+fn is_mac_cmd_pressed(pressed: bool) -> bool {
+    pressed
+}
+
+#[cfg(not(target_os = "macos"))]
+fn is_mac_cmd_pressed(_pressed: bool) -> bool {
+    false
+}
+
+#[cfg(target_os = "macos")]
+fn is_command_pressed(_ctrl: bool, logo: bool) -> bool {
+    logo
+}
+
+#[cfg(not(target_os = "macos"))]
+fn is_command_pressed(ctrl: bool, _logo: bool) -> bool {
+    ctrl
 }
