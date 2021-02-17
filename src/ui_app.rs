@@ -1,5 +1,6 @@
 use ash::vk;
 use memoffset::offset_of;
+use glsl_layout::AsStd140;
 
 use std::cell::RefCell;
 use std::collections::{HashMap, VecDeque};
@@ -8,7 +9,7 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 use super::support::{Device, PerFrameSet, FrameId, Queue};
-use super::support::buffer::{VertexBuffer, IndexBuffer};
+use super::support::buffer::{VertexBuffer, IndexBuffer, UniformBuffer};
 use super::support::command_buffer::{SecondaryCommandBuffer, CommandPool};
 use super::support::descriptor::{
     DescriptorBindings,
@@ -16,13 +17,21 @@ use super::support::descriptor::{
     DescriptorSetLayout,
     DescriptorSet,
     DescriptorRef,
+    UniformBufferRef,
     CombinedRef,
 };
 use super::support::renderer::{Pipeline, PipelineParameters, RenderPass};
 use super::support::shader::{VertexShader, FragmentShader};
 use super::support::texture::{Texture, Sampler};
+use super::utils::Vector2f;
 
 const DEBUG_DESCRIPTOR_SETS: bool = false;
+
+#[derive(Debug, Default, Clone, Copy, AsStd140)]
+pub struct UIData {
+    #[allow(unused)]
+    window_size: Vector2f,
+}
 
 pub trait UIApp {
     fn name(&self) -> &str;
@@ -249,12 +258,14 @@ pub struct UIAppRenderer {
     frame_data: VecDeque<FrameData>,
     descriptor_pools: PerFrameSet<DescriptorPool>,
     descriptor_set_layout: DescriptorSetLayout,
+    uniform: UIData,
+    uniform_buffers: PerFrameSet<Rc<UniformBuffer<UIData>>>,
     command_pool: Rc<CommandPool>,
     pipeline: Rc<Pipeline<egui::paint::tessellator::Vertex>>,
 }
 
 impl UIAppRenderer {
-    const POOL_SIZE: u32 = super::support::MAX_FRAMES_IN_FLIGHT as u32 * 4;
+    const POOL_SIZE: u32 = super::support::MAX_FRAMES_IN_FLIGHT as u32 * 8;
 
     pub fn new(
 	device: &Device,
@@ -267,8 +278,12 @@ impl UIAppRenderer {
 	let descriptor_pools = {
 	    let mut pool_sizes: HashMap<vk::DescriptorType, u32> = HashMap::new();
 	    pool_sizes.insert(
+		vk::DescriptorType::UNIFORM_BUFFER,
+		Self::POOL_SIZE / 2,
+	    );
+	    pool_sizes.insert(
 		vk::DescriptorType::COMBINED_IMAGE_SAMPLER,
-		Self::POOL_SIZE,
+		Self::POOL_SIZE / 2,
 	    );
 	    PerFrameSet::new(|_| {
 		DescriptorPool::new(
@@ -280,6 +295,12 @@ impl UIAppRenderer {
 	};
 
 	let descriptor_bindings = DescriptorBindings::new()
+	    .with_binding(
+		vk::DescriptorType::UNIFORM_BUFFER,
+		1,
+		vk::ShaderStageFlags::ALL,
+		false,
+	    )
 	    .with_binding(
 		vk::DescriptorType::COMBINED_IMAGE_SAMPLER,
 		1,
@@ -327,10 +348,22 @@ impl UIAppRenderer {
 
 	let frame_data = VecDeque::new();
 
+	let uniform = UIData{
+	    window_size: Vector2f::new(window_width as f32, window_height as f32),
+	};
+	let uniform_buffers = PerFrameSet::new(|_| {
+	    Ok(Rc::new(UniformBuffer::new(
+		device,
+		Some(&uniform),
+	    )?))
+	})?;
+
 	Ok(Self{
 	    frame_data,
 	    descriptor_pools,
 	    descriptor_set_layout,
+	    uniform,
+	    uniform_buffers,
 	    command_pool,
 	    pipeline,
 	})
@@ -342,10 +375,11 @@ impl UIAppRenderer {
 	device: &Device,
 	frame: FrameId,
 	jobs: &egui::paint::tessellator::PaintJobs,
-	egui_texture: &Arc<egui::paint::Texture>
+	egui_texture: &Arc<egui::paint::Texture>,
     ) -> anyhow::Result<()> {
 	self.descriptor_pools.get_mut(frame).reset()?;
-
+	let uniform_buffer = self.uniform_buffers.get(frame);
+	uniform_buffer.update(&self.uniform)?;
 
 	let sampler = Rc::new(Sampler::new(
 	    device,
@@ -365,6 +399,9 @@ impl UIAppRenderer {
 	    let vertex_buffer = Rc::new(VertexBuffer::new(device, &triangles.vertices)?);
 	    let index_buffer = Rc::new(IndexBuffer::new(device, &triangles.indices)?);
 	    let items: Vec<Rc<dyn DescriptorRef>> = vec![
+		Rc::new(UniformBufferRef::new(
+		    vec![Rc::clone(uniform_buffer)],
+		)),
 		Rc::new(CombinedRef::new(
 		    Rc::clone(&sampler),
 		    vec![Rc::clone(&texture)],
@@ -466,11 +503,12 @@ impl UIAppRenderer {
     }
 
     pub fn update_pipeline_viewport(
-	&self,
+	&mut self,
 	viewport_width: usize,
 	viewport_height: usize,
 	render_pass: &RenderPass,
     ) -> anyhow::Result<()> {
+	self.uniform.window_size = Vector2f::new(viewport_width as f32, viewport_height as f32);
 	self.pipeline.update_viewport(
 	    viewport_width,
 	    viewport_height,
@@ -505,7 +543,7 @@ impl super::support::shader::Vertex for egui::paint::tessellator::Vertex {
             vk::VertexInputAttributeDescription{
                 binding: 0,
                 location: 2,
-                format: vk::Format::R32G32B32A32_SFLOAT,
+                format: vk::Format::R8G8B8A8_UINT,
                 offset: offset_of!(Self, color) as u32,
             },
         ]

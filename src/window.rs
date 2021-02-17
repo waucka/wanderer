@@ -155,6 +155,7 @@ pub trait VulkanApp {
     fn set_y_speed(&mut self, speed: f32);
     fn set_z_speed(&mut self, speed: f32);
     fn toggle_uniform_twiddler(&mut self) -> bool;
+    fn get_window_size(&self) -> (usize, usize);
 }
 
 fn mutually_exclusive(a: &mut bool, b: &mut bool) {
@@ -301,8 +302,20 @@ pub fn main_loop<A: 'static + VulkanApp>(event_loop: EventLoop<()>, mut vulkan_a
     );
 
     let mut camera_controller = CameraMotionController::new();
-    let raw_input: egui::RawInput = Default::default();
+    let mut raw_input: egui::RawInput = Default::default();
     event_loop.run(move |event, _, control_flow| {
+	let (window_width, window_height) = vulkan_app.get_window_size();
+	raw_input.screen_rect = Some(egui::math::Rect{
+	    min: egui::math::Pos2{
+		x: 0.0,
+		y: 0.0,
+	    },
+	    max: egui::math::Pos2{
+		x: window_width as f32,
+		y: window_height as f32,
+	    },
+	});
+
         match event {
             Event::WindowEvent { event, .. } => {
                 match event {

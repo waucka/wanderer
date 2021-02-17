@@ -723,6 +723,11 @@ impl Device {
 	}
 	queues
     }
+
+    pub fn get_window_size(&self) -> (usize, usize) {
+	let size = self.inner.window.inner_size();
+	(size.width as usize, size.height as usize)
+    }
 }
 
 struct QueueSet {

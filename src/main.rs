@@ -969,6 +969,10 @@ impl VulkanApp for VulkanApp21 {
 	    true
 	}
     }
+
+    fn get_window_size(&self) -> (usize, usize) {
+	self.device.get_window_size()
+    }
 }
 
 fn main() {
