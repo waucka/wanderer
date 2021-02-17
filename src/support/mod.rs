@@ -1024,6 +1024,7 @@ fn create_logical_device(
     let mut physical_device_features = vk::PhysicalDeviceFeatures{
         ..Default::default()
     };
+    physical_device_features.independent_blend = vk::TRUE;
 
     let mut imageless_framebuffer_features = vk::PhysicalDeviceImagelessFramebufferFeatures{
 	s_type: vk::StructureType::PHYSICAL_DEVICE_IMAGELESS_FRAMEBUFFER_FEATURES,

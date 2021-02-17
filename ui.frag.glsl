@@ -16,6 +16,6 @@ void main() {
   vec4 tex_color = texture(ui_texture, fs_in.uv);
   tex_color.g = tex_color.r;
   tex_color.b = tex_color.r;
-  tex_color.a = tex_color.r;
+  tex_color.a = 1.0;
   out_color = tex_color * fs_in.color;
 }

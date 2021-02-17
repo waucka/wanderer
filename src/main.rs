@@ -116,6 +116,12 @@ impl UIManager {
 	render_pass: &RenderPass,
 	subpass: u32,
     ) -> anyhow::Result<Self> {
+	let egui_ctx = egui::CtxRef::default();
+	let mut style: egui::style::Style = egui::style::Style::clone(&egui_ctx.style());
+	style.visuals.widgets.noninteractive.bg_fill = egui::paint::color::Color32::from_rgba_unmultiplied(
+	    255, 128, 128, 192,
+	);
+	egui_ctx.set_style(style);
 	Ok(Self{
 	    renderer: RefCell::new(UIAppRenderer::new(
 		device,
@@ -127,7 +133,7 @@ impl UIManager {
 	    )?),
 	    app: None,
 	    app_context: ui_app::AppContext::new(),
-	    egui_ctx: egui::CtxRef::default(),
+	    egui_ctx,
 	})
     }
 
