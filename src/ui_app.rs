@@ -229,7 +229,7 @@ impl UIApp for UniformTwiddler {
 }
 
 struct RenderingSet {
-    vertex_buffer: Rc<VertexBuffer<epaint::Vertex>>,
+    vertex_buffer: Rc<VertexBuffer<egui::paint::Vertex>>,
     index_buffer: Rc<IndexBuffer>,
     descriptor_set: Rc<DescriptorSet>,
 }
@@ -248,7 +248,7 @@ impl FrameData {
 	pool: Rc<CommandPool>,
 	render_pass: &RenderPass,
 	subpass: u32,
-	pipeline: &Rc<Pipeline<epaint::Vertex>>,
+	pipeline: &Rc<Pipeline<egui::paint::Vertex>>,
     ) -> anyhow::Result<Rc<SecondaryCommandBuffer>> {
 	let command_buffer = SecondaryCommandBuffer::new(
 	    device,
@@ -298,7 +298,7 @@ pub struct UIAppRenderer {
     uniform: UIData,
     uniform_buffers: PerFrameSet<Rc<UniformBuffer<UIData>>>,
     command_pool: Rc<CommandPool>,
-    pipeline: Rc<Pipeline<epaint::Vertex>>,
+    pipeline: Rc<Pipeline<egui::paint::Vertex>>,
 }
 
 impl UIAppRenderer {
@@ -352,7 +352,7 @@ impl UIAppRenderer {
 
 	let set_layouts = [&descriptor_set_layout];
 
-        let vert_shader: VertexShader<epaint::Vertex> =
+        let vert_shader: VertexShader<egui::paint::Vertex> =
             VertexShader::from_spv_file(
                 device,
                 Path::new("./ui.vert.spv"),
@@ -555,7 +555,7 @@ impl UIAppRenderer {
     }
 }
 
-impl super::support::shader::Vertex for epaint::Vertex {
+impl super::support::shader::Vertex for egui::paint::Vertex {
     fn get_binding_description() -> Vec<vk::VertexInputBindingDescription> {
         vec![vk::VertexInputBindingDescription{
             binding: 0,
