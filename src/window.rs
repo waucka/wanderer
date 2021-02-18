@@ -1,4 +1,4 @@
-use winit::event::{Event, VirtualKeyCode, ElementState, KeyboardInput, WindowEvent};
+use winit::event::{Event, VirtualKeyCode, ElementState, KeyboardInput, WindowEvent, MouseButton};
 use winit::event_loop::{EventLoop, ControlFlow};
 use winit::window::{Window, WindowBuilder};
 
@@ -337,6 +337,7 @@ pub fn main_loop<A: 'static + VulkanApp>(event_loop: EventLoop<()>, mut vulkan_a
 	},
     );
 
+    let mut mouse_pos = None;
     let mut camera_controller = CameraMotionController::new();
     let mut raw_input: egui::RawInput = Default::default();
     event_loop.run(move |event, _, control_flow| {
@@ -351,6 +352,7 @@ pub fn main_loop<A: 'static + VulkanApp>(event_loop: EventLoop<()>, mut vulkan_a
 		y: window_height as f32,
 	    },
 	});
+	raw_input.pixels_per_point = Some(1.0);
 
         match event {
             Event::WindowEvent { event, .. } => {
@@ -361,14 +363,41 @@ pub fn main_loop<A: 'static + VulkanApp>(event_loop: EventLoop<()>, mut vulkan_a
                     },
 		    WindowEvent::CursorMoved { position, .. } => {
 			let scale = vulkan_app.get_window_scale();
-			raw_input.mouse_pos = Some(egui::math::Pos2{
+			mouse_pos = Some(egui::math::Pos2{
 			    x: position.x as f32 / scale,
 			    y: position.y as f32 / scale,
 			});
+			raw_input.events.push(egui::Event::PointerMoved(mouse_pos.unwrap()));
 		    },
 		    WindowEvent::MouseInput { state, button, .. } => {
-			if button == winit::event::MouseButton::Left {
-			    raw_input.mouse_down = state == ElementState::Pressed;
+			let egui_button = match button {
+			    MouseButton::Left => Some(egui::PointerButton::Primary),
+			    MouseButton::Right => Some(egui::PointerButton::Secondary),
+			    MouseButton::Middle => Some(egui::PointerButton::Middle),
+			    _ => None,
+			};
+			if let Some(egui_button) = egui_button {
+			    let scale = vulkan_app.get_window_scale();
+			    raw_input.events.push(egui::Event::PointerButton{
+				pos: mouse_pos.unwrap_or(egui::math::Pos2{
+				    x: 0.0_f32 / scale,
+				    y: 0.0_f32 / scale,
+				}),
+				button: egui_button,
+				pressed: state == ElementState::Pressed,
+				modifiers: egui::Modifiers{
+				    alt: keyboard_state.modifiers.alt,
+				    ctrl: keyboard_state.modifiers.ctrl,
+				    shift: keyboard_state.modifiers.shift,
+				    mac_cmd: is_mac_cmd_pressed(
+					keyboard_state.modifiers.logo,
+				    ),
+				    command: is_command_pressed(
+					keyboard_state.modifiers.ctrl,
+					keyboard_state.modifiers.logo,
+				    ),
+				},
+			    });
 			}
 		    },
 		    WindowEvent::ModifiersChanged(state) => {

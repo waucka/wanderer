@@ -121,7 +121,7 @@ impl HdrControlUniform {
 	let mut items: HashMap<String, Box<dyn ui_app::UniformDataItem>> = HashMap::new();
 	items.insert(
 	    "exposure".to_owned(),
-	    Box::new(ui_app::UniformDataItemSliderSFloat::new(self.exposure, 0.0..=10.0)),
+	    Box::new(ui_app::UniformDataItemSliderSFloat::new(self.exposure, 0.0..=2.0)),
 	);
 	items.insert(
 	    "gamma".to_owned(),
@@ -201,7 +201,7 @@ impl UIManager {
 	let egui_ctx = egui::CtxRef::default();
 	let mut style: egui::style::Style = egui::style::Style::clone(&egui_ctx.style());
 	style.visuals.widgets.noninteractive.bg_fill = egui::paint::color::Color32::from_rgba_unmultiplied(
-	    255, 128, 128, 192,
+	    128, 128, 128, 192,
 	);
 	egui_ctx.set_style(style);
 	Ok(Self{

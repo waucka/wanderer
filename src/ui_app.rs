@@ -217,19 +217,19 @@ impl UIApp for UniformTwiddler {
 	egui::Window::new(&self.title)
 	    .scroll(true)
 	    .show(ctx, |ui| {
-		for (name, value) in items.iter_mut() {
-		    // TODO: switch to Grid after updating to egui 0.9
-		    ui.vertical(|ui| {
+		egui::Grid::new(format!("{}-grid", &self.title)).show(ui, |ui| {
+		    for (name, value) in items.iter_mut() {
 			ui.label(name);
 			value.ui(ui);
-		    });
-		}
+			ui.end_row();
+		    }
+		});
 	    });
     }
 }
 
 struct RenderingSet {
-    vertex_buffer: Rc<VertexBuffer<egui::paint::tessellator::Vertex>>,
+    vertex_buffer: Rc<VertexBuffer<epaint::Vertex>>,
     index_buffer: Rc<IndexBuffer>,
     descriptor_set: Rc<DescriptorSet>,
 }
@@ -248,7 +248,7 @@ impl FrameData {
 	pool: Rc<CommandPool>,
 	render_pass: &RenderPass,
 	subpass: u32,
-	pipeline: &Rc<Pipeline<egui::paint::tessellator::Vertex>>,
+	pipeline: &Rc<Pipeline<epaint::Vertex>>,
     ) -> anyhow::Result<Rc<SecondaryCommandBuffer>> {
 	let command_buffer = SecondaryCommandBuffer::new(
 	    device,
@@ -298,7 +298,7 @@ pub struct UIAppRenderer {
     uniform: UIData,
     uniform_buffers: PerFrameSet<Rc<UniformBuffer<UIData>>>,
     command_pool: Rc<CommandPool>,
-    pipeline: Rc<Pipeline<egui::paint::tessellator::Vertex>>,
+    pipeline: Rc<Pipeline<epaint::Vertex>>,
 }
 
 impl UIAppRenderer {
@@ -352,7 +352,7 @@ impl UIAppRenderer {
 
 	let set_layouts = [&descriptor_set_layout];
 
-        let vert_shader: VertexShader<egui::paint::tessellator::Vertex> =
+        let vert_shader: VertexShader<epaint::Vertex> =
             VertexShader::from_spv_file(
                 device,
                 Path::new("./ui.vert.spv"),
@@ -411,7 +411,7 @@ impl UIAppRenderer {
 	&mut self,
 	device: &Device,
 	frame: FrameId,
-	jobs: &egui::paint::tessellator::PaintJobs,
+	meshes: &Vec<egui::ClippedMesh>,
 	egui_texture: &Arc<egui::paint::Texture>,
     ) -> anyhow::Result<()> {
 	self.descriptor_pools.get_mut(frame).reset()?;
@@ -432,9 +432,10 @@ impl UIAppRenderer {
 	)?);
 
 	let mut rendering_sets = vec![];
-	for (_, triangles) in jobs.iter() {
-	    let vertex_buffer = Rc::new(VertexBuffer::new(device, &triangles.vertices)?);
-	    let index_buffer = Rc::new(IndexBuffer::new(device, &triangles.indices)?);
+	for clipped_mesh in meshes.iter() {
+	    let mesh = &clipped_mesh.1;
+	    let vertex_buffer = Rc::new(VertexBuffer::new(device, &mesh.vertices)?);
+	    let index_buffer = Rc::new(IndexBuffer::new(device, &mesh.indices)?);
 	    let items: Vec<Rc<dyn DescriptorRef>> = vec![
 		Rc::new(UniformBufferRef::new(
 		    vec![Rc::clone(uniform_buffer)],
@@ -554,7 +555,7 @@ impl UIAppRenderer {
     }
 }
 
-impl super::support::shader::Vertex for egui::paint::tessellator::Vertex {
+impl super::support::shader::Vertex for epaint::Vertex {
     fn get_binding_description() -> Vec<vk::VertexInputBindingDescription> {
         vec![vk::VertexInputBindingDescription{
             binding: 0,
