@@ -87,6 +87,23 @@ impl UniformBufferObject {
 	);
 	Rc::new(ui_app::UniformData::new(items))
     }
+
+    fn set_data(&mut self, twiddler: Rc<ui_app::UniformTwiddler>) {
+	let uniform_data = twiddler.get_uniform_data();
+	let items = uniform_data.get_items();
+
+	if let Some(item) = items.get("use_parallax") {
+	    if let ui_app::UniformDataVar::Bool(use_parallax) = item.get_value() {
+		self.use_parallax = use_parallax.into();
+	    }
+	}
+
+	if let Some(item) = items.get("use_ao") {
+	    if let ui_app::UniformDataVar::Bool(use_ao) = item.get_value() {
+		self.use_ao = use_ao.into();
+	    }
+	}
+    }
 }
 
 #[derive(Debug, Default, Clone, Copy, AsStd140)]
@@ -97,6 +114,56 @@ struct HdrControlUniform {
     gamma: f32,
     #[allow(unused)]
     algo: u32,
+}
+
+impl HdrControlUniform {
+    fn get_twiddler_data(&self) -> Rc<ui_app::UniformData> {
+	let mut items: HashMap<String, Box<dyn ui_app::UniformDataItem>> = HashMap::new();
+	items.insert(
+	    "exposure".to_owned(),
+	    Box::new(ui_app::UniformDataItemSliderSFloat::new(self.exposure, 0.0..=10.0)),
+	);
+	items.insert(
+	    "gamma".to_owned(),
+	    Box::new(ui_app::UniformDataItemSliderSFloat::new(self.gamma, 1.0..=5.0)),
+	);
+	items.insert(
+	    "algo".to_owned(),
+	    Box::new(ui_app::UniformDataItemRadio::new(
+		self.algo,
+		vec![
+		    ("No-op".to_owned(), 0),
+		    ("Linear".to_owned(), 1),
+		    ("Reinhard simple".to_owned(), 2),
+		    ("Invalid".to_owned(), 9001),
+		],
+	    )),
+	);
+	Rc::new(ui_app::UniformData::new(items))
+    }
+
+    fn set_data(&mut self, twiddler: Rc<ui_app::UniformTwiddler>) {
+	let uniform_data = twiddler.get_uniform_data();
+	let items = uniform_data.get_items();
+
+	if let Some(item) = items.get("exposure") {
+	    if let ui_app::UniformDataVar::SFloat(exposure) = item.get_value() {
+		self.exposure = exposure;
+	    }
+	}
+
+	if let Some(item) = items.get("gamma") {
+	    if let ui_app::UniformDataVar::SFloat(gamma) = item.get_value() {
+		self.gamma = gamma;
+	    }
+	}
+
+	if let Some(item) = items.get("algo") {
+	    if let ui_app::UniformDataVar::UInt(algo) = item.get_value() {
+		self.algo = algo;
+	    }
+	}
+    }
 }
 
 struct SecondaryBufferSet {
@@ -118,7 +185,7 @@ impl Clone for SecondaryBufferSet {
 
 pub struct UIManager {
     renderer: RefCell<UIAppRenderer>,
-    app: Option<Rc<dyn UIApp>>,
+    apps: Vec<Rc<dyn UIApp>>,
     app_context: ui_app::AppContext,
     egui_ctx: egui::CtxRef,
 }
@@ -146,7 +213,7 @@ impl UIManager {
 		subpass,
 		device.get_default_graphics_queue(),
 	    )?),
-	    app: None,
+	    apps: Vec::new(),
 	    app_context: ui_app::AppContext::new(),
 	    egui_ctx,
 	})
@@ -162,26 +229,20 @@ impl UIManager {
 	frame: FrameId,
 	raw_input: egui::RawInput,
     ) -> anyhow::Result<()> {
-	match &self.app {
-	    Some(app) => {
-		self.egui_ctx.begin_frame(raw_input);
-		app.update(&self.egui_ctx, &mut self.app_context);
-		let (_egui_output, paint_commands) = self.egui_ctx.end_frame();
-		let egui_texture = self.egui_ctx.texture();
-		let paint_jobs = self.egui_ctx.tessellate(paint_commands);
-		self.renderer.borrow_mut().add_frame_data(
-		    device,
-		    frame,
-		    &paint_jobs,
-		    &egui_texture,
-		)?;
-		Ok(())
-	    },
-	    None => {
-		self.renderer.borrow_mut().clear_frame_data();
-		Ok(())
-	    },
+	self.egui_ctx.begin_frame(raw_input);
+	for app in self.apps.iter() {
+	    app.update(&self.egui_ctx, &mut self.app_context);
 	}
+	let (_egui_output, paint_commands) = self.egui_ctx.end_frame();
+	let egui_texture = self.egui_ctx.texture();
+	let paint_jobs = self.egui_ctx.tessellate(paint_commands);
+	self.renderer.borrow_mut().add_frame_data(
+	    device,
+	    frame,
+	    &paint_jobs,
+	    &egui_texture,
+	)?;
+	Ok(())
     }
 
     fn get_command_buffer(
@@ -210,19 +271,19 @@ impl UIManager {
 	)
     }
 
-    fn set_app(
+    fn add_app(
 	&mut self,
 	app: Rc<dyn UIApp>,
     ) {
-	self.app = Some(app);
+	self.apps.push(app);
     }
 
-    fn clear_app(&mut self) {
-	self.app = None;
+    fn clear_apps(&mut self) {
+	self.apps.clear();
     }
 
-    fn has_app(&self) -> bool {
-	self.app.is_some()
+    fn has_apps(&self) -> bool {
+	!self.apps.is_empty()
     }
 }
 
@@ -246,6 +307,7 @@ struct VulkanApp21 {
     global_descriptor_set_layout: DescriptorSetLayout,
     global_frame_data: PerFrameSet<GlobalFrameData>,
     global_uniform: UniformBufferObject,
+    hdr_control_uniform: HdrControlUniform,
     #[allow(unused)]
     scene: Scene,
     attachment_set: AttachmentSet,
@@ -263,6 +325,7 @@ struct VulkanApp21 {
     ui_subpass: SubpassRef,
 
     uniform_twiddler_app: Rc<ui_app::UniformTwiddler>,
+    hdr_twiddler_app: Rc<ui_app::UniformTwiddler>,
 
     is_framebuffer_resized: bool,
     yaw_speed: f32,
@@ -464,14 +527,12 @@ impl VulkanApp21 {
 	    use_ao: true.into(),
 	};
 
-	// Begin egui setup
 	let uniform_twiddler_app = Rc::new(
 	    ui_app::UniformTwiddler::new(
 		"Global Uniform",
 		global_uniform.get_twiddler_data(),
 	    )
 	);
-	// End egui setup
 
 	let global_frame_data = PerFrameSet::new(
 	    |_| {
@@ -599,6 +660,13 @@ impl VulkanApp21 {
 	    algo: 2,
 	};
 
+	let hdr_twiddler_app = Rc::new(
+	    ui_app::UniformTwiddler::new(
+		"HDR Lighting",
+		hdr_control_uniform.get_twiddler_data(),
+	    )
+	);
+
 	let hdr_frame_data = PerFrameSet::new(
 	    |_| {
 		let uniform_buffer = Rc::new(UniformBuffer::new(
@@ -659,6 +727,7 @@ impl VulkanApp21 {
 		global_descriptor_set_layout,
 		global_frame_data,
 		global_uniform,
+		hdr_control_uniform,
 		scene,
 		attachment_set,
 		render_target_color,
@@ -675,6 +744,7 @@ impl VulkanApp21 {
 		ui_subpass,
 
 		uniform_twiddler_app,
+		hdr_twiddler_app,
 
 		is_framebuffer_resized: false,
 		yaw_speed: 0.0,
@@ -779,22 +849,11 @@ impl VulkanApp21 {
 	    view_matrix.into()
 	};
 
-	let uniform_data = self.uniform_twiddler_app.get_uniform_data();
-	let items = uniform_data.get_items();
-
-	if let Some(item) = items.get("use_parallax") {
-	    if let ui_app::UniformDataVar::Bool(use_parallax) = item.get_value() {
-		uniform_transform.use_parallax = use_parallax.into();
-	    }
-	}
-
-	if let Some(item) = items.get("use_ao") {
-	    if let ui_app::UniformDataVar::Bool(use_ao) = item.get_value() {
-		uniform_transform.use_ao = use_ao.into();
-	    }
-	}
+	uniform_transform.set_data(Rc::clone(&self.uniform_twiddler_app));
+	self.hdr_control_uniform.set_data(Rc::clone(&self.hdr_twiddler_app));
 
 	self.global_frame_data.get(frame).uniform_buffer.update(uniform_transform)?;
+	self.hdr_frame_data.get(frame).uniform_buffer.update(&self.hdr_control_uniform)?;
 	Ok(())
     }
 
@@ -1006,12 +1065,14 @@ impl VulkanApp for VulkanApp21 {
     }
 
     fn toggle_uniform_twiddler(&mut self) -> bool {
-	if self.ui_manager.has_app() {
-	    self.ui_manager.clear_app();
+	if self.ui_manager.has_apps() {
+	    self.ui_manager.clear_apps();
 	    false
 	} else {
-	    let app = Rc::clone(&self.uniform_twiddler_app);
-	    self.ui_manager.set_app(app);
+	    let global_uniform = Rc::clone(&self.uniform_twiddler_app);
+	    let hdr_uniform = Rc::clone(&self.hdr_twiddler_app);
+	    self.ui_manager.add_app(global_uniform);
+	    self.ui_manager.add_app(hdr_uniform);
 	    true
 	}
     }
