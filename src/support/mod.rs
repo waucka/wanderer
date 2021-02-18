@@ -49,6 +49,137 @@ pub mod texture;
 pub mod descriptor;
 
 use utils::Defaulted;
+use command_buffer::CommandPool;
+
+#[derive(Copy, Clone)]
+pub struct FrameId {
+    idx: usize,
+}
+
+impl FrameId {
+    fn initial() -> Self {
+	Self{
+	    idx: 0,
+	}
+    }
+
+    fn advance(&mut self) {
+	self.idx = (self.idx + 1) % MAX_FRAMES_IN_FLIGHT;
+    }
+
+    pub fn next(&self) -> Self {
+	Self {
+	    idx: (self.idx + 1) % MAX_FRAMES_IN_FLIGHT,
+	}
+    }
+}
+
+impl From<usize> for FrameId {
+    fn from(idx: usize) -> Self {
+	if idx >= MAX_FRAMES_IN_FLIGHT {
+	    panic!(
+		"Tried to create a FrameId with index {} (must be < {})",
+		idx,
+		MAX_FRAMES_IN_FLIGHT,
+	    );
+	}
+	Self{
+	    idx,
+	}
+    }
+}
+
+impl From<u32> for FrameId {
+    fn from(idx: u32) -> Self {
+	if idx as usize >= MAX_FRAMES_IN_FLIGHT {
+	    panic!(
+		"Tried to create a FrameId with index {} (must be < {})",
+		idx,
+		MAX_FRAMES_IN_FLIGHT,
+	    );
+	}
+	Self{
+	    idx: idx as usize,
+	}
+    }
+}
+
+impl std::fmt::Display for FrameId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.idx.fmt(f)
+    }
+}
+
+pub struct PerFrameSet<T> {
+    items: Vec<T>,
+}
+
+impl<T> PerFrameSet<T> {
+    pub fn new<F>(mut item_generator: F) -> anyhow::Result<Self>
+    where
+        F: FnMut(FrameId) -> anyhow::Result<T>
+    {
+	let mut items = Vec::new();
+	for i in 0..MAX_FRAMES_IN_FLIGHT {
+	    items.push(item_generator(FrameId::from(i))?);
+	}
+	Ok(Self{
+	    items,
+	})
+    }
+
+    pub fn get(&self, frame: FrameId) -> &T {
+	&self.items[frame.idx]
+    }
+
+    pub fn get_mut(&mut self, frame: FrameId) -> &mut T {
+	&mut self.items[frame.idx]
+    }
+
+    // Extracts data from self and creates a new PerFrameSet containing the extracted data
+    pub fn extract<F, R>(&self, extractor: F) -> anyhow::Result<PerFrameSet<R>>
+    where
+        F: Fn(&T) -> anyhow::Result<R>
+    {
+	let new_set: PerFrameSet<R> = PerFrameSet::new(|frame| {
+	    extractor(self.get(FrameId::from(frame)))
+	})?;
+	Ok(new_set)
+    }
+
+    #[allow(unused)]
+    pub fn foreach<F>(&mut self, mut action: F) -> anyhow::Result<()>
+    where
+        F: FnMut(FrameId, &mut T) -> anyhow::Result<()>
+    {
+	for i in 0..MAX_FRAMES_IN_FLIGHT {
+	    let item = &mut self.items[i];
+	    action(FrameId::from(i), item)?;
+	}
+	Ok(())
+    }
+
+    pub fn replace<F>(&mut self, mut constructor: F) -> anyhow::Result<()>
+    where
+        F: FnMut(FrameId, &T) -> anyhow::Result<T>
+    {
+	let mut new_items = Vec::new();
+	for i in 0..MAX_FRAMES_IN_FLIGHT {
+	    let old_item = &self.items[i];
+	    new_items.push(constructor(FrameId::from(i), old_item)?);
+	}
+	self.items = new_items;
+	Ok(())
+    }
+}
+
+impl<T: Clone> Clone for PerFrameSet<T> {
+    fn clone(&self) -> Self {
+	Self{
+	    items: self.items.clone(),
+	}
+    }
+}
 
 pub fn pick_physical_device(
     instance: &ash::Instance,
@@ -374,13 +505,11 @@ pub const ENGINE_VERSION: u32 = vk::make_version(0, 1, 0);
 pub const VULKAN_API_VERSION: u32 = vk::make_version(1, 2, 131);
 
 pub struct Queue {
-    device: Rc<InnerDevice>,
     family_idx: u32,
     queue_idx: u32,
     flags: vk::QueueFlags,
     can_present: bool,
     queue: vk::Queue,
-    command_pool: vk::CommandPool,
 }
 
 impl Queue {
@@ -394,25 +523,13 @@ impl Queue {
 	let queue = unsafe {
 	    device.device.get_device_queue(family_idx, queue_idx)
 	};
-	let command_pool_create_info = vk::CommandPoolCreateInfo{
-            s_type: vk::StructureType::COMMAND_POOL_CREATE_INFO,
-            p_next: ptr::null(),
-            flags: vk::CommandPoolCreateFlags::empty(),
-            queue_family_index: family_idx,
-	};
-
-	let command_pool = unsafe {
-            device.device.create_command_pool(&command_pool_create_info, None)?
-	};
 
 	Ok(Self{
-	    device,
 	    family_idx,
 	    queue_idx,
 	    flags,
 	    can_present,
 	    queue,
-	    command_pool,
 	})
     }
 
@@ -449,14 +566,6 @@ impl std::cmp::PartialEq for Queue {
     }
 }
 impl std::cmp::Eq for Queue {}
-
-impl Drop for Queue {
-    fn drop(&mut self) {
-	unsafe {
-	    self.device.device.destroy_command_pool(self.command_pool, None);
-	}
-    }
-}
 
 pub struct DeviceBuilder {
     window_title: Defaulted<String>,
@@ -589,14 +698,21 @@ impl Device {
 	self.inner.get_default_graphics_queue()
     }
 
+    pub fn get_default_graphics_pool(&self) -> Rc<CommandPool> {
+	self.inner.get_default_graphics_pool()
+    }
+
     #[allow(unused)]
     pub fn get_default_present_queue(&self) -> Rc<Queue> {
 	self.inner.get_default_present_queue()
     }
 
-    #[allow(unused)]
     pub fn get_default_transfer_queue(&self) -> Rc<Queue> {
 	self.inner.get_default_transfer_queue()
+    }
+
+    pub fn get_default_transfer_pool(&self) -> Rc<CommandPool> {
+	self.inner.get_default_transfer_pool()
     }
 
     #[allow(unused)]
@@ -607,10 +723,16 @@ impl Device {
 	}
 	queues
     }
+
+    pub fn get_window_size(&self) -> (usize, usize) {
+	let size = self.inner.window.inner_size();
+	(size.width as usize, size.height as usize)
+    }
 }
 
 struct QueueSet {
     queues: Vec<Rc<Queue>>,
+    pools: Vec<Rc<CommandPool>>,
     // These three are indexes into the above vector ("queues").
     default_graphics_queue_idx: usize,
     default_present_queue_idx: usize,
@@ -634,9 +756,19 @@ struct InnerDevice {
     queue_set: RefCell<QueueSet>,
 }
 
+impl std::fmt::Debug for InnerDevice {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+	f.debug_struct("InnerDevice")
+	    .field("window", &self.window)
+	    .field("surface", &self.surface)
+	    .field("physical_device", &self.physical_device)
+	    .finish()
+    }
+}
+
 impl InnerDevice {
     pub fn new(event_loop: &EventLoop<()>, builder: DeviceBuilder) -> anyhow::Result<Rc<Self>> {
-        let window_title = builder.window_title.get_value();
+	let window_title = builder.window_title.get_value();
         let (window_width, window_height) = builder.window_size.get_value();
         let window = super::window::init_window(
             event_loop,
@@ -697,6 +829,7 @@ impl InnerDevice {
             device: device.clone(),
 	    queue_set: RefCell::new(QueueSet {
 		queues: Vec::new(),
+		pools: Vec::new(),
 		default_graphics_queue_idx: 0,
 		default_present_queue_idx: 0,
 		default_transfer_queue_idx: 0,
@@ -731,7 +864,18 @@ impl InnerDevice {
 		    _ => panic!("Unable to create all three of: graphics queue, present queue, transfer queue!"),
 		};
 
+	    let mut pools = Vec::new();
+	    for q in queues.iter() {
+		pools.push(CommandPool::from_inner(
+		    Rc::clone(&this),
+		    Rc::clone(q),
+		    false,
+		    false,
+		)?);
+	    }
+
 	    queue_set.queues = queues;
+	    queue_set.pools = pools;
 	    queue_set.default_graphics_queue_idx = default_graphics_queue_idx;
 	    queue_set.default_present_queue_idx = default_present_queue_idx;
 	    queue_set.default_transfer_queue_idx = default_transfer_queue_idx;
@@ -742,19 +886,28 @@ impl InnerDevice {
 
     fn get_default_graphics_queue(&self) -> Rc<Queue> {
 	let queue_set = self.queue_set.borrow();
-	queue_set.queues[queue_set.default_graphics_queue_idx].clone()
+	Rc::clone(&queue_set.queues[queue_set.default_graphics_queue_idx])
+    }
+
+    fn get_default_graphics_pool(&self) -> Rc<CommandPool> {
+	let queue_set = self.queue_set.borrow();
+	Rc::clone(&queue_set.pools[queue_set.default_graphics_queue_idx])
     }
 
     #[allow(unused)]
     fn get_default_present_queue(&self) -> Rc<Queue> {
 	let queue_set = self.queue_set.borrow();
-	queue_set.queues[queue_set.default_present_queue_idx].clone()
+	Rc::clone(&queue_set.queues[queue_set.default_present_queue_idx])
     }
 
-    #[allow(unused)]
     fn get_default_transfer_queue(&self) -> Rc<Queue> {
 	let queue_set = self.queue_set.borrow();
-	queue_set.queues[queue_set.default_transfer_queue_idx].clone()
+	Rc::clone(&queue_set.queues[queue_set.default_transfer_queue_idx])
+    }
+
+    fn get_default_transfer_pool(&self) -> Rc<CommandPool> {
+	let queue_set = self.queue_set.borrow();
+	Rc::clone(&queue_set.pools[queue_set.default_transfer_queue_idx])
     }
 
     fn query_swapchain_support(&self) -> SwapChainSupport {
@@ -871,6 +1024,7 @@ fn create_logical_device(
     let mut physical_device_features = vk::PhysicalDeviceFeatures{
         ..Default::default()
     };
+    physical_device_features.independent_blend = vk::TRUE;
 
     let mut imageless_framebuffer_features = vk::PhysicalDeviceImagelessFramebufferFeatures{
 	s_type: vk::StructureType::PHYSICAL_DEVICE_IMAGELESS_FRAMEBUFFER_FEATURES,

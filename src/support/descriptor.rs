@@ -3,7 +3,9 @@ use ash::vk;
 use anyhow::anyhow;
 use glsl_layout::AsStd140;
 
+use std::cell::RefCell;
 use std::collections::HashMap;
+use std::os::raw::c_void;
 use std::pin::Pin;
 use std::ptr;
 use std::rc::Rc;
@@ -253,39 +255,116 @@ impl DescriptorRef for InputAttachmentRef {
     }
 }
 
+#[derive(Clone)]
+pub struct DescriptorBindings {
+    bindings: Vec<(vk::DescriptorSetLayoutBinding, vk::DescriptorBindingFlags)>,
+    next_binding_id: u32,
+}
+
+impl DescriptorBindings {
+    pub fn new() -> Self {
+	Self{
+	    bindings: Vec::new(),
+	    next_binding_id: 0,
+	}
+    }
+
+    pub fn len(&self) -> usize {
+	self.bindings.len()
+    }
+
+    pub fn with_binding(
+	mut self,
+	descriptor_type: vk::DescriptorType,
+	descriptor_count: u32,
+	stage_flags: vk::ShaderStageFlags,
+	allow_partial: bool,
+    ) -> Self {
+	let binding_id = self.next_binding_id;
+	self.next_binding_id += 1;
+	self.with_exact_binding(
+	    binding_id,
+	    descriptor_type,
+	    descriptor_count,
+	    stage_flags,
+	    allow_partial,
+	)
+    }
+
+    pub fn with_exact_binding(
+	mut self,
+	binding: u32,
+	descriptor_type: vk::DescriptorType,
+	descriptor_count: u32,
+	stage_flags: vk::ShaderStageFlags,
+	allow_partial: bool,
+    ) -> Self {
+	let flags = if allow_partial {
+	    vk::DescriptorBindingFlags::PARTIALLY_BOUND
+		| vk::DescriptorBindingFlags::PARTIALLY_BOUND_EXT
+	} else {
+	    vk::DescriptorBindingFlags::empty()
+	};
+
+	self.bindings.push(
+	    (
+		vk::DescriptorSetLayoutBinding{
+		    binding,
+		    descriptor_type,
+		    descriptor_count,
+		    stage_flags,
+		    p_immutable_samplers: ptr::null(),
+		},
+		flags,
+	    )
+	);
+	self
+    }
+}
+
 pub struct DescriptorSetLayout {
     device: Rc<InnerDevice>,
     pub (in super) layout: vk::DescriptorSetLayout,
-    bindings: Vec<vk::DescriptorSetLayoutBinding>,
+    bindings: DescriptorBindings,
 }
 
 impl DescriptorSetLayout {
     pub fn new(
 	device: &Device,
-	bindings: Vec<vk::DescriptorSetLayoutBinding>,
+	bindings: DescriptorBindings,
     ) -> anyhow::Result<Self> {
-	/*let binding_flags = [
-	    vk::DescriptorBindingFlags::PARTIALLY_BOUND,
-	    vk::DescriptorBindingFlags::PARTIALLY_BOUND_EXT,
-	];
+	let (binding_set, binding_flags) = {
+	    let mut binding_sets = vec![];
+	    let mut binding_flags = vec![];
+	    for (binding, flags) in bindings.bindings.iter() {
+		dbg!(binding);
+		dbg!(flags);
+		binding_sets.push(binding.clone());
+		binding_flags.push(*flags);
+	    }
+	    (binding_sets, binding_flags)
+	};
 	let binding_flags_info = vk::DescriptorSetLayoutBindingFlagsCreateInfo{
 	    s_type: vk::StructureType::DESCRIPTOR_SET_LAYOUT_BINDING_FLAGS_CREATE_INFO,
 	    p_next: ptr::null(),
 	    binding_count: binding_flags.len() as u32,
 	    p_binding_flags: binding_flags.as_ptr(),
 	};
-	let p_next: *const c_void = ((&binding_flags_info) as *const _) as *const c_void;*/
+	let p_next: *const c_void = ((&binding_flags_info) as *const _) as *const c_void;
 	let layout_info = vk::DescriptorSetLayoutCreateInfo{
 	    s_type: vk::StructureType::DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
-	    p_next: ptr::null(),
+	    p_next,
 	    flags: vk::DescriptorSetLayoutCreateFlags::empty(),
-	    binding_count: bindings.len() as u32,
-	    p_bindings: bindings.as_ptr(),
+	    binding_count: binding_set.len() as u32,
+	    p_bindings: binding_set.as_ptr(),
 	};
+	dbg!(&layout_info);
 	Ok(Self{
 	    device: device.inner.clone(),
 	    layout: unsafe {
-		device.inner.device.create_descriptor_set_layout(&layout_info, None)?
+		let layout = device.inner.device.create_descriptor_set_layout(&layout_info, None)?;
+		dbg!(&layout);
+		layout
 	    },
 	    bindings,
 	})
@@ -325,9 +404,7 @@ impl DescriptorPool {
 	Ok(this)
     }
 
-    #[allow(unused)]
     pub fn reset(&mut self) -> anyhow::Result<()> {
-	panic!("This shouldn't be happening yet!");
 	let mut i = 0;
 	for set in &self.sets {
 	    if Rc::strong_count(set) > 1 {
@@ -337,12 +414,14 @@ impl DescriptorPool {
 	    }
 	    i += 1;
 	}
+	self.sets.clear();
 	unsafe {
 	    if self.pools.len() > 1 {
-		for pool in self.pools.drain(1..) {
-		    self.device.device.destroy_descriptor_pool(pool, None);
+		for pool in self.pools[1..].iter() {
+		    self.device.device.destroy_descriptor_pool(*pool, None);
 		}
 	    }
+	    self.pools.truncate(1);
 	    self.device.device.reset_descriptor_pool(
 		self.pools[0],
 		vk::DescriptorPoolResetFlags::empty(),
@@ -377,7 +456,7 @@ impl DescriptorPool {
 	&mut self,
 	count: usize,
 	layout: &DescriptorSetLayout,
-	items: &Vec<Box<dyn DescriptorRef>>,
+	items: &[Rc<dyn DescriptorRef>],
     ) -> anyhow::Result<Vec<Rc<DescriptorSet>>> {
 	if items.len() != layout.bindings.len() {
 	    return Err(anyhow!(
@@ -395,9 +474,10 @@ impl DescriptorPool {
 	    for (binding, item) in items.iter().enumerate() {
 		writers.push(item.get_write(Rc::<DescriptorSet>::clone(set), binding as u32));
 		writes.push(writers.last().unwrap().get());
+		set.add_dependency(Rc::<dyn DescriptorRef>::clone(item));
 	    }
 	    if DEBUG_DESCRIPTOR_SETS {
-		println!("Performing {} writes to descriptor set {:?}...", writes.len(), set);
+		println!("Performing {} writes to descriptor set {:?}...", writes.len(), set.inner);
 		for write in writes.iter() {
 		    println!(
 			"\tset: {:?}\n\tbinding: {}\n\ttype: {:?}\n\tcount: {}",
@@ -448,7 +528,9 @@ impl DescriptorPool {
 		let mut sets = Vec::new();
 		for set in vk_sets {
 		    sets.push(Rc::new(DescriptorSet{
+			device: Rc::clone(&self.device),
 			inner: set,
+			dependencies: RefCell::new(Vec::new()),
 		    }));
 		}
 		sets
@@ -483,14 +565,31 @@ impl Drop for DescriptorPool {
     }
 }
 
-#[derive(Debug)]
 pub struct DescriptorSet {
+    device: Rc<InnerDevice>,
     pub (in super) inner: vk::DescriptorSet,
+    dependencies: RefCell<Vec<Rc<dyn DescriptorRef>>>,
+}
+
+impl DescriptorSet {
+    fn add_dependency(&self, item: Rc<dyn DescriptorRef>) {
+	self.dependencies.borrow_mut().push(item);
+    }
 }
 
 impl Drop for DescriptorSet {
     fn drop(&mut self) {
 	// Drop has been implemented solely so that DescriptorSets can be recorded as
 	// dependencies for CommandBuffers.
+    }
+}
+
+impl std::fmt::Debug for DescriptorSet {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("DescriptorSet")
+            .field("device", &self.device)
+            .field("inner", &self.inner)
+	    .field("dependencies", &format!("[{} items]", self.dependencies.borrow().len()))
+            .finish()
     }
 }

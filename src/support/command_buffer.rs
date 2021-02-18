@@ -20,19 +20,24 @@ pub struct SecondaryCommandBuffer {
 impl SecondaryCommandBuffer {
     pub fn new(
 	device: &Device,
-	queue: Rc<Queue>,
+	pool: Rc<CommandPool>,
     ) -> anyhow::Result<Rc<SecondaryCommandBuffer>> {
 	let secondary = Rc::new(
 	    SecondaryCommandBuffer{
 		buf: RefCell::new(CommandBuffer::from_inner_device(
 		    Rc::clone(&device.inner),
 		    vk::CommandBufferLevel::SECONDARY,
-		    Rc::clone(&queue),
+		    pool,
 		)?),
 	    });
 	Ok(secondary)
     }
 
+    pub fn reset(&self) -> anyhow::Result<()> {
+	self.buf.borrow_mut().reset()
+    }
+
+    // TODO: should this be mut?
     pub fn record<T, R>(
 	&self,
 	usage_flags: vk::CommandBufferUsageFlags,
@@ -73,9 +78,72 @@ impl Drop for SecondaryCommandBuffer {
     }
 }
 
-pub struct CommandBuffer {
+pub struct CommandPool {
     device: Rc<InnerDevice>,
     queue: Rc<Queue>,
+    command_pool: vk::CommandPool,
+}
+
+impl CommandPool {
+    pub fn new(
+	device: &Device,
+	queue: Rc<Queue>,
+	can_reset: bool,
+	transient_buffers: bool,
+    ) -> anyhow::Result<Rc<Self>> {
+	Self::from_inner(
+	    Rc::clone(&device.inner),
+	    queue,
+	    can_reset,
+	    transient_buffers,
+	)
+    }
+
+    pub (in super) fn from_inner(
+	device: Rc<InnerDevice>,
+	queue: Rc<Queue>,
+	can_reset: bool,
+	transient_buffers: bool,
+    ) -> anyhow::Result<Rc<Self>> {
+	let command_pool_create_info = vk::CommandPoolCreateInfo{
+            s_type: vk::StructureType::COMMAND_POOL_CREATE_INFO,
+            p_next: ptr::null(),
+            flags: {
+		let mut flags = vk::CommandPoolCreateFlags::empty();
+		if can_reset {
+		    flags |= vk::CommandPoolCreateFlags::RESET_COMMAND_BUFFER;
+		}
+		if transient_buffers {
+		    flags |= vk::CommandPoolCreateFlags::TRANSIENT;
+		}
+		flags
+	    },
+            queue_family_index: queue.family_idx,
+	};
+
+	let command_pool = unsafe {
+            device.device.create_command_pool(&command_pool_create_info, None)?
+	};
+
+	Ok(Rc::new(Self{
+	    device,
+	    queue,
+	    command_pool,
+	}))
+    }
+}
+
+impl Drop for CommandPool {
+    fn drop(&mut self) {
+	unsafe {
+	    self.device.device.destroy_command_pool(self.command_pool, None);
+	}
+    }
+}
+
+pub struct CommandBuffer {
+    device: Rc<InnerDevice>,
+    pool: Rc<CommandPool>,
     inflight_fence: vk::Fence,
     level: vk::CommandBufferLevel,
     buf: vk::CommandBuffer,
@@ -87,21 +155,21 @@ pub struct CommandBuffer {
 impl CommandBuffer {
     pub fn new(
 	device: &Device,
-	queue: Rc<Queue>,
+	pool: Rc<CommandPool>,
     ) -> anyhow::Result<Self> {
-	CommandBuffer::from_inner_device(device.inner.clone(), vk::CommandBufferLevel::PRIMARY, queue)
+	CommandBuffer::from_inner_device(device.inner.clone(), vk::CommandBufferLevel::PRIMARY, pool)
     }
 
     fn from_inner_device(
 	device: Rc<InnerDevice>,
 	level: vk::CommandBufferLevel,
-	queue: Rc<Queue>,
+	pool: Rc<CommandPool>,
     ) -> anyhow::Result<Self> {
         let command_buffer_allocate_info = vk::CommandBufferAllocateInfo{
             s_type: vk::StructureType::COMMAND_BUFFER_ALLOCATE_INFO,
             p_next: ptr::null(),
             command_buffer_count: 1,
-            command_pool: queue.command_pool,
+            command_pool: pool.command_pool,
             level,
         };
 
@@ -128,7 +196,7 @@ impl CommandBuffer {
 
 	Ok(Self{
 	    device,
-	    queue,
+	    pool,
 	    inflight_fence,
 	    level,
 	    buf: command_buffer,
@@ -136,7 +204,7 @@ impl CommandBuffer {
 	})
     }
 
-    pub fn wait_for_pending(&self) -> anyhow::Result<()> {
+    pub fn wait_for_ready(&self) -> anyhow::Result<()> {
         let wait_fences = [self.inflight_fence];
         unsafe {
             self.device.device
@@ -229,7 +297,7 @@ impl CommandBuffer {
                 .reset_fences(&wait_fences)?;
             self.device.device
                 .queue_submit(
-                    self.queue.get(),
+                    self.pool.queue.get(),
                     &submit_infos,
                     self.inflight_fence,
                 )?;
@@ -239,7 +307,7 @@ impl CommandBuffer {
 
     #[allow(unused)]
     pub fn reset(&mut self) -> anyhow::Result<()> {
-	self.wait_for_pending()?;
+	self.wait_for_ready()?;
 	unsafe {
 	    self.device.device.reset_command_buffer(self.buf, vk::CommandBufferResetFlags::empty())?;
 	}
@@ -258,7 +326,7 @@ impl CommandBuffer {
 	    &[],
 	    &[],
 	)?;
-	self.wait_for_pending()?;
+	self.wait_for_ready()?;
 
         Ok(())
     }
@@ -266,19 +334,19 @@ impl CommandBuffer {
     #[allow(unused)]
     pub fn run_oneshot<T>(
 	device: &Device,
-	queue: Rc<Queue>,
+	pool: Rc<CommandPool>,
 	wait_stage: vk::PipelineStageFlags,
 	cmd_fn: T,
     ) -> anyhow::Result<()>
     where
         T: FnMut(&mut BufferWriter) -> anyhow::Result<()>
     {
-	CommandBuffer::run_oneshot_internal(device.inner.clone(), queue, cmd_fn)
+	CommandBuffer::run_oneshot_internal(device.inner.clone(), pool, cmd_fn)
     }
 
     pub (in super) fn run_oneshot_internal<T>(
 	device: Rc<InnerDevice>,
-	queue: Rc<Queue>,
+	pool: Rc<CommandPool>,
 	cmd_fn: T,
     ) -> anyhow::Result<()>
     where
@@ -287,7 +355,7 @@ impl CommandBuffer {
         let mut cmd_buf = CommandBuffer::from_inner_device(
 	    device,
 	    vk::CommandBufferLevel::PRIMARY,
-	    queue,
+	    pool,
 	)?;
 	cmd_buf.record(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT, cmd_fn)?;
         cmd_buf.submit_and_wait()?;
@@ -303,10 +371,10 @@ impl Drop for CommandBuffer {
             match self.device.device
                 .wait_for_fences(&wait_fences, true, std::u64::MAX) {
 		    Ok(_) => (),
-		    Err(e) => println!("Failed to wait for buffer to be in Pending state: {}", e),
+		    Err(e) => println!("Failed to wait for buffer to be ready: {}", e),
 		};
 	    self.device.device.destroy_fence(self.inflight_fence, None);
-	    self.device.device.free_command_buffers(self.queue.command_pool, &buffers);
+	    self.device.device.free_command_buffers(self.pool.command_pool, &buffers);
 	}
     }
 }

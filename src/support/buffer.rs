@@ -6,8 +6,8 @@ use glsl_layout::AsStd140;
 use std::rc::Rc;
 use std::ptr;
 
-use super::{Device, InnerDevice, Queue};
-use super::command_buffer::CommandBuffer;
+use super::{Device, InnerDevice};
+use super::command_buffer::{CommandBuffer, CommandPool};
 
 pub trait HasBuffer {
     fn get_buffer(&self) -> vk::Buffer;
@@ -126,7 +126,7 @@ impl Buffer {
     pub fn copy(
         src_buffer: Rc<Buffer>,
         dst_buffer: Rc<Buffer>,
-	queue: Rc<Queue>,
+	pool: Rc<CommandPool>,
     ) -> anyhow::Result<()> {
 	if src_buffer.size > dst_buffer.size {
 	    return Err(anyhow!(
@@ -137,7 +137,7 @@ impl Buffer {
 	}
         CommandBuffer::run_oneshot_internal(
 	   src_buffer.device.clone(),
-	    queue,
+	    pool,
 	    |writer| {
 		let copy_regions = [vk::BufferCopy{
 		    src_offset: 0,
@@ -246,7 +246,7 @@ impl<T> VertexBuffer<T> {
 	Buffer::copy(
 	    Rc::clone(&upload_buffer.buf),
 	    Rc::clone(&vertex_buffer),
-	    device.inner.get_default_transfer_queue(),
+	    device.inner.get_default_transfer_pool(),
 	)?;
 
 	Ok(Self{
@@ -300,7 +300,7 @@ impl IndexBuffer {
 	Buffer::copy(
 	    Rc::clone(&upload_buffer.buf),
 	    Rc::clone(&index_buffer),
-	    device.inner.get_default_transfer_queue(),
+	    device.inner.get_default_transfer_pool(),
 	)?;
 
 	Ok(Self{
@@ -399,84 +399,5 @@ where <T as AsStd140>::Std140: Sized
     fn drop(&mut self) {
 	// Drop has been implemented solely so that UniformBuffers can be recorded as
 	// dependencies for CommandBuffers.
-    }
-}
-
-pub struct UniformBufferSet<T: AsStd140>
-where <T as AsStd140>::Std140: Sized
-{
-    uniform_struct: T,
-    uniform_buffers: Vec<Rc<UniformBuffer<T>>>,
-}
-
-impl<T: AsStd140> UniformBufferSet<T>
-where <T as AsStd140>::Std140: Sized
-{
-    pub fn new(
-	device: &Device,
-	uniform_struct: T,
-    ) -> anyhow::Result<Self> {
-	let mut uniform_buffers = vec![];
-	for _ in 0..super::MAX_FRAMES_IN_FLIGHT {
-	    uniform_buffers.push(Rc::new(UniformBuffer::new(device, Some(&uniform_struct))?));
-	}
-	Ok(Self{
-	    uniform_struct,
-	    uniform_buffers,
-	})
-    }
-
-    // Alters the uniform data and uploads it to the selected GPU buffer
-    pub fn update_and_upload<F, R>(&mut self, i: usize, update_fn: F) -> anyhow::Result<R>
-    where
-	F: Fn(&mut T) -> anyhow::Result<R>
-    {
-	if i > self.uniform_buffers.len() {
-	    return Err(anyhow!(
-		"Attempted to update uniform buffer #{} of {}",
-		i+1,
-		self.uniform_buffers.len(),
-	    ));
-	}
-	let result = update_fn(&mut self.uniform_struct)?;
-	self.uniform_buffers[i].update(&self.uniform_struct)?;
-	Ok(result)
-    }
-
-    // Alters the uniform data without altering any GPU buffers
-    pub fn update<F, R>(&mut self, update_fn: F) -> anyhow::Result<R>
-    where
-	F: Fn(&mut T) -> anyhow::Result<R>
-    {
-	update_fn(&mut self.uniform_struct)
-    }
-
-    // Uploads whatever is currently in the uniform data to the selected GPU buffer
-    #[allow(unused)]
-    pub fn sync(&self, i: usize) -> anyhow::Result<()> {
-	if i > self.uniform_buffers.len() {
-	    return Err(anyhow!(
-		"Attempted to sync uniform buffer #{} of {}",
-		i+1,
-		self.uniform_buffers.len(),
-	    ));
-	}
-	self.uniform_buffers[i].update(&self.uniform_struct)
-    }
-
-    pub fn len(&self) -> usize {
-	self.uniform_buffers.len()
-    }
-
-    pub fn get_buffer(&self, i: usize) -> anyhow::Result<Rc<UniformBuffer<T>>> {
-	if i < self.uniform_buffers.len() {
-	    Ok(self.uniform_buffers[i].clone())
-	} else {
-	    Err(anyhow!(
-		"Index out of range ({} uniform buffers, index {})",
-		self.uniform_buffers.len(),
-		i,
-	    ))
-	}
     }
 }

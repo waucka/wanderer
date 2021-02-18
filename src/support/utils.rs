@@ -56,6 +56,7 @@ pub fn find_supported_format(
     panic!("Failed to find supported format!")
 }
 
+#[derive(Clone)]
 pub struct Defaulted<T> {
     value: Option<T>,
     default: T,

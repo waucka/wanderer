@@ -10,7 +10,7 @@ use std::ptr;
 use std::os::raw::c_void;
 use std::pin::Pin;
 
-use super::{Device, InnerDevice, Queue};
+use super::{Device, InnerDevice, Queue, FrameId};
 use super::image::{Image, ImageView, ImageBuilder};
 use super::texture::Texture;
 use super::shader::{VertexShader, FragmentShader, Vertex, GenericShader};
@@ -27,6 +27,7 @@ pub struct Presenter {
     last_frame_duration: Duration,
     current_swapchain_sync: usize,
     desired_fps: u32,
+    current_frame: FrameId,
 
     present_queue: Rc<Queue>,
 }
@@ -89,6 +90,7 @@ impl Presenter {
 	    last_frame: Instant::now(),
 	    last_frame_duration: Duration::new(0, 0),
 	    desired_fps,
+	    current_frame: FrameId::initial(),
 
 	    present_queue: device.inner.get_default_present_queue(),
 	})
@@ -123,6 +125,10 @@ impl Presenter {
 	    let fps = 1_000_000_000_f64 / (ns as f64);
 	    fps as u32
 	}
+    }
+
+    pub fn get_current_frame(&self) -> FrameId {
+	self.current_frame
     }
 
     pub fn wait_for_next_frame(&self) -> anyhow::Result<Duration> {
@@ -221,12 +227,12 @@ impl Presenter {
 	//println!("Presenting a frame...");
 	//let start = std::time::Instant::now();
         let swapchains = [self.swapchain.swapchain];
-	let signal_semaphores = [self.render_finished_semaphores[self.current_swapchain_sync]];
+	let wait_semaphores = [self.render_finished_semaphores[self.current_swapchain_sync]];
         let present_info = vk::PresentInfoKHR{
             s_type: vk::StructureType::PRESENT_INFO_KHR,
             p_next: ptr::null(),
             wait_semaphore_count: 1,
-            p_wait_semaphores: signal_semaphores.as_ptr(),
+            p_wait_semaphores: wait_semaphores.as_ptr(),
             swapchain_count: 1,
             p_swapchains: swapchains.as_ptr(),
             p_image_indices: &image_index,
@@ -253,6 +259,7 @@ impl Presenter {
 	self.last_frame_duration = self.last_frame.elapsed();
         self.last_frame = Instant::now();
 	//println!("Presented frame in {}ns", start.elapsed().as_nanos());
+	self.current_frame.advance();
 	Ok(())
     }
 }
@@ -576,6 +583,7 @@ where
     ) -> anyhow::Result<Self> {
 	let mut vk_set_layouts = vec![];
 	for layout in set_layouts.iter() {
+	    dbg!(&layout.layout);
 	    vk_set_layouts.push(layout.layout);
 	}
 
@@ -588,6 +596,7 @@ where
             push_constant_range_count: 0,
             p_push_constant_ranges: ptr::null(),
 	};
+	dbg!(&pipeline_layout_create_info);
 
 	let pipeline_layout = unsafe {
             device.device
@@ -795,14 +804,14 @@ where
 	};
 
 	let color_blend_attachment_states = [vk::PipelineColorBlendAttachmentState{
-            blend_enable: vk::FALSE,
-            color_write_mask: vk::ColorComponentFlags::all(),
-            src_color_blend_factor: vk::BlendFactor::ONE,
-            dst_color_blend_factor: vk::BlendFactor::ZERO,
-            color_blend_op: vk::BlendOp::ADD,
-            src_alpha_blend_factor: vk::BlendFactor::ONE,
-            dst_alpha_blend_factor: vk::BlendFactor::ZERO,
-            alpha_blend_op: vk::BlendOp::ADD,
+	    blend_enable: vk::TRUE,
+	    color_write_mask: vk::ColorComponentFlags::all(),
+	    src_color_blend_factor: vk::BlendFactor::SRC_ALPHA,
+	    dst_color_blend_factor: vk::BlendFactor::ONE_MINUS_SRC_ALPHA,
+	    color_blend_op: vk::BlendOp::ADD,
+	    src_alpha_blend_factor: vk::BlendFactor::ONE_MINUS_DST_ALPHA,
+	    dst_alpha_blend_factor: vk::BlendFactor::ONE,
+	    alpha_blend_op: vk::BlendOp::ADD,
 	}];
 	let color_blend_state = vk::PipelineColorBlendStateCreateInfo{
             s_type: vk::StructureType::PIPELINE_COLOR_BLEND_STATE_CREATE_INFO,

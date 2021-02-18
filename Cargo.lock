@@ -26,12 +26,12 @@ checksum = "e8fd72866655d1904d6b0997d0b07ba561047d070fbe29de039031c641b61217"
 
 [[package]]
 name = "ahash"
-version = "0.6.2"
+version = "0.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a75b7e6a93ecd6dbd2c225154d0fa7f86205574ecaa6c87429fb5f66ee677c44"
+checksum = "efa60d2eadd8b12a996add391db32bd1153eac697ba4869660c0016353611426"
 dependencies = [
  "getrandom 0.2.1",
- "lazy_static",
+ "once_cell",
  "version_check",
 ]
 
@@ -527,13 +527,11 @@ checksum = "9ea835d29036a4087793836fa931b08837ad5e957da9e23886b29586fb9b6650"
 
 [[package]]
 name = "egui"
-version = "0.7.0"
+version = "0.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f073ba598f9a5c37d920cf934eee70f2d3bb945a2950620a5e4cd0894db69e5d"
+checksum = "0e0733d89ca8ea4bc10b83563c5efe9397726efb3cce32892107ae802dbd18b4"
 dependencies = [
- "ahash 0.6.2",
- "atomic_refcell",
- "rusttype",
+ "epaint",
 ]
 
 [[package]]
@@ -543,10 +541,37 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e78d4f1cc4ae33bbfc157ed5d5a5ef3bc29227303d595861deb238fcec4e9457"
 
 [[package]]
+name = "emath"
+version = "0.9.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a7861866ceff7d4fe55c0dc34dc45102d9d16ac567e4674e2cc36f71b79693cf"
+
+[[package]]
+name = "epaint"
+version = "0.9.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c2c8ff3363987df86b1358bf1ed57a20fd80cf88164b2be05fd5dd309993c14e"
+dependencies = [
+ "ahash 0.7.0",
+ "atomic_refcell",
+ "emath",
+ "rusttype",
+]
+
+[[package]]
 name = "fixedbitset"
 version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "37ab347416e802de484e4d03c7316c48f1ecb56574dfd4a46a80f173ce1de04d"
+
+[[package]]
+name = "float-cmp"
+version = "0.8.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e1267f4ac4f343772758f7b1bdcbe767c218bbab93bb432acbf5162bbf85a6c4"
+dependencies = [
+ "num-traits",
+]
 
 [[package]]
 name = "fnv"
@@ -1642,6 +1667,27 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "41cc0f7e4d5d4544e8861606a285bb08d3e70712ccc7d2b84d7c0ccfaf4b05ce"
 
 [[package]]
+name = "renderdoc"
+version = "0.10.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "58fd0c55a54ecce0889aaca4ee87831cfe8c83c275c439443162be1f0eab5fdc"
+dependencies = [
+ "bitflags",
+ "float-cmp",
+ "libloading",
+ "once_cell",
+ "renderdoc-sys",
+ "winapi 0.3.9",
+ "wio",
+]
+
+[[package]]
+name = "renderdoc-sys"
+version = "0.7.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f1382d1f0a252c4bf97dc20d979a2fdd05b024acd7c2ed0f7595d7817666a157"
+
+[[package]]
 name = "rustc_version"
 version = "0.2.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2128,6 +2174,7 @@ dependencies = [
  "memoffset",
  "nphysics3d",
  "num 0.3.1",
+ "renderdoc",
  "simdnoise",
  "specs",
  "timer",
@@ -2353,6 +2400,15 @@ dependencies = [
  "wayland-client",
  "winapi 0.3.9",
  "x11-dl",
+]
+
+[[package]]
+name = "wio"
+version = "0.2.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5d129932f4644ac2396cb456385cbf9e63b5b30c6e8dc4820bdca4eb082037a5"
+dependencies = [
+ "winapi 0.3.9",
 ]
 
 [[package]]
