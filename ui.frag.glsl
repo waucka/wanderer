@@ -16,6 +16,12 @@ void main() {
   vec4 tex_color = texture(ui_texture, fs_in.uv);
   tex_color.g = tex_color.r;
   tex_color.b = tex_color.r;
-  tex_color.a = 1.0;
+
+  // Ugly hack to handle background transparency
+  if (fs_in.uv.x == 0.0 && fs_in.uv.y == 0.0) {
+    tex_color.a = 1.0;
+  } else {
+    tex_color.a = tex_color.r;
+  }
   out_color = tex_color * fs_in.color;
 }
