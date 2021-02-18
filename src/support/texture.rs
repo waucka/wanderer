@@ -30,14 +30,15 @@ impl Texture {
 	let mip_levels = 1;
 
 	let upload_buffer = UploadSourceBuffer::new(device, image_size)?;
-	upload_buffer.copy_data(&egui_texture.pixels)?;
+	let srgba_pixels: Vec<egui::paint::Color32> = egui_texture.srgba_pixels().collect();
+	upload_buffer.copy_data(&srgba_pixels)?;
 
 	let mut image = Image::new(
 	    device,
 	    ImageBuilder::new2d(image_width as usize, image_height as usize)
 		.with_mip_levels(mip_levels)
 		.with_num_samples(vk::SampleCountFlags::TYPE_1)
-		.with_format(vk::Format::R8_SRGB)
+		.with_format(vk::Format::R8G8B8A8_SRGB)
 		.with_tiling(vk::ImageTiling::OPTIMAL)
 		.with_usage(
 		    vk::ImageUsageFlags::TRANSFER_SRC |

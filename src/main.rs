@@ -201,7 +201,7 @@ impl UIManager {
 	let egui_ctx = egui::CtxRef::default();
 	let mut style: egui::style::Style = egui::style::Style::clone(&egui_ctx.style());
 	style.visuals.widgets.noninteractive.bg_fill = egui::paint::color::Color32::from_rgba_unmultiplied(
-	    128, 128, 128, 192,
+	    32, 32, 32, 192,
 	);
 	egui_ctx.set_style(style);
 	Ok(Self{

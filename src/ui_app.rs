@@ -424,7 +424,7 @@ impl UIAppRenderer {
 	    vk::Filter::LINEAR,
 	    vk::Filter::LINEAR,
 	    vk::SamplerMipmapMode::NEAREST,
-	    vk::SamplerAddressMode::REPEAT,
+	    vk::SamplerAddressMode::CLAMP_TO_EDGE,
 	)?);
 	let texture = Rc::new(Texture::from_egui(
 	    device,
