@@ -58,49 +58,49 @@ pub struct FrameId {
 
 impl FrameId {
     fn initial() -> Self {
-	Self{
-	    idx: 0,
-	}
+        Self{
+            idx: 0,
+        }
     }
 
     fn advance(&mut self) {
-	self.idx = (self.idx + 1) % MAX_FRAMES_IN_FLIGHT;
+        self.idx = (self.idx + 1) % MAX_FRAMES_IN_FLIGHT;
     }
 
     pub fn next(&self) -> Self {
-	Self {
-	    idx: (self.idx + 1) % MAX_FRAMES_IN_FLIGHT,
-	}
+        Self {
+            idx: (self.idx + 1) % MAX_FRAMES_IN_FLIGHT,
+        }
     }
 }
 
 impl From<usize> for FrameId {
     fn from(idx: usize) -> Self {
-	if idx >= MAX_FRAMES_IN_FLIGHT {
-	    panic!(
-		"Tried to create a FrameId with index {} (must be < {})",
-		idx,
-		MAX_FRAMES_IN_FLIGHT,
-	    );
-	}
-	Self{
-	    idx,
-	}
+        if idx >= MAX_FRAMES_IN_FLIGHT {
+            panic!(
+                "Tried to create a FrameId with index {} (must be < {})",
+                idx,
+                MAX_FRAMES_IN_FLIGHT,
+            );
+        }
+        Self{
+            idx,
+        }
     }
 }
 
 impl From<u32> for FrameId {
     fn from(idx: u32) -> Self {
-	if idx as usize >= MAX_FRAMES_IN_FLIGHT {
-	    panic!(
-		"Tried to create a FrameId with index {} (must be < {})",
-		idx,
-		MAX_FRAMES_IN_FLIGHT,
-	    );
-	}
-	Self{
-	    idx: idx as usize,
-	}
+        if idx as usize >= MAX_FRAMES_IN_FLIGHT {
+            panic!(
+                "Tried to create a FrameId with index {} (must be < {})",
+                idx,
+                MAX_FRAMES_IN_FLIGHT,
+            );
+        }
+        Self{
+            idx: idx as usize,
+        }
     }
 }
 
@@ -119,21 +119,21 @@ impl<T> PerFrameSet<T> {
     where
         F: FnMut(FrameId) -> anyhow::Result<T>
     {
-	let mut items = Vec::new();
-	for i in 0..MAX_FRAMES_IN_FLIGHT {
-	    items.push(item_generator(FrameId::from(i))?);
-	}
-	Ok(Self{
-	    items,
-	})
+        let mut items = Vec::new();
+        for i in 0..MAX_FRAMES_IN_FLIGHT {
+            items.push(item_generator(FrameId::from(i))?);
+        }
+        Ok(Self{
+            items,
+        })
     }
 
     pub fn get(&self, frame: FrameId) -> &T {
-	&self.items[frame.idx]
+        &self.items[frame.idx]
     }
 
     pub fn get_mut(&mut self, frame: FrameId) -> &mut T {
-	&mut self.items[frame.idx]
+        &mut self.items[frame.idx]
     }
 
     // Extracts data from self and creates a new PerFrameSet containing the extracted data
@@ -141,10 +141,10 @@ impl<T> PerFrameSet<T> {
     where
         F: Fn(&T) -> anyhow::Result<R>
     {
-	let new_set: PerFrameSet<R> = PerFrameSet::new(|frame| {
-	    extractor(self.get(FrameId::from(frame)))
-	})?;
-	Ok(new_set)
+        let new_set: PerFrameSet<R> = PerFrameSet::new(|frame| {
+            extractor(self.get(FrameId::from(frame)))
+        })?;
+        Ok(new_set)
     }
 
     #[allow(unused)]
@@ -152,32 +152,32 @@ impl<T> PerFrameSet<T> {
     where
         F: FnMut(FrameId, &mut T) -> anyhow::Result<()>
     {
-	for i in 0..MAX_FRAMES_IN_FLIGHT {
-	    let item = &mut self.items[i];
-	    action(FrameId::from(i), item)?;
-	}
-	Ok(())
+        for i in 0..MAX_FRAMES_IN_FLIGHT {
+            let item = &mut self.items[i];
+            action(FrameId::from(i), item)?;
+        }
+        Ok(())
     }
 
     pub fn replace<F>(&mut self, mut constructor: F) -> anyhow::Result<()>
     where
         F: FnMut(FrameId, &T) -> anyhow::Result<T>
     {
-	let mut new_items = Vec::new();
-	for i in 0..MAX_FRAMES_IN_FLIGHT {
-	    let old_item = &self.items[i];
-	    new_items.push(constructor(FrameId::from(i), old_item)?);
-	}
-	self.items = new_items;
-	Ok(())
+        let mut new_items = Vec::new();
+        for i in 0..MAX_FRAMES_IN_FLIGHT {
+            let old_item = &self.items[i];
+            new_items.push(constructor(FrameId::from(i), old_item)?);
+        }
+        self.items = new_items;
+        Ok(())
     }
 }
 
 impl<T: Clone> Clone for PerFrameSet<T> {
     fn clone(&self) -> Self {
-	Self{
-	    items: self.items.clone(),
-	}
+        Self{
+            items: self.items.clone(),
+        }
     }
 }
 
@@ -476,25 +476,25 @@ fn create_instance(
     let extension_names = super::platforms::required_extension_names();
     let mut try_extension_names = vec![];
     for ext in extension_names.iter() {
-	try_extension_names.push(*ext);
+        try_extension_names.push(*ext);
     }
     for ext in super::platforms::optional_extension_names() {
-	try_extension_names.push(ext);
+        try_extension_names.push(ext);
     }
     let maybe_instance = try_create_instance(
-	entry,
-	&app_info,
-	&try_extension_names,
-	&debug_utils_create_info,
+        entry,
+        &app_info,
+        &try_extension_names,
+        &debug_utils_create_info,
     );
     match maybe_instance {
-	Ok(instance) => Ok(instance),
-	Err(_) => try_create_instance(
-	    entry,
-	    &app_info,
-	    &extension_names,
-	    &debug_utils_create_info,
-	),
+        Ok(instance) => Ok(instance),
+        Err(_) => try_create_instance(
+            entry,
+            &app_info,
+            &extension_names,
+            &debug_utils_create_info,
+        ),
     }
 }
 
@@ -514,23 +514,23 @@ pub struct Queue {
 
 impl Queue {
     fn new(
-	device: Rc<InnerDevice>,
-	family_idx: u32,
-	queue_idx: u32,
-	flags: vk::QueueFlags,
-	can_present: bool,
+        device: Rc<InnerDevice>,
+        family_idx: u32,
+        queue_idx: u32,
+        flags: vk::QueueFlags,
+        can_present: bool,
     ) -> anyhow::Result<Self> {
-	let queue = unsafe {
-	    device.device.get_device_queue(family_idx, queue_idx)
-	};
+        let queue = unsafe {
+            device.device.get_device_queue(family_idx, queue_idx)
+        };
 
-	Ok(Self{
-	    family_idx,
-	    queue_idx,
-	    flags,
-	    can_present,
-	    queue,
-	})
+        Ok(Self{
+            family_idx,
+            queue_idx,
+            flags,
+            can_present,
+            queue,
+        })
     }
 
     pub fn can_do_graphics(&self) -> bool {
@@ -538,7 +538,7 @@ impl Queue {
     }
 
     pub fn can_present(&self) -> bool {
-	self.can_present
+        self.can_present
     }
 
     #[allow(unused)]
@@ -556,13 +556,13 @@ impl Queue {
     }
 
     fn get(&self) -> vk::Queue {
-	self.queue
+        self.queue
     }
 }
 
 impl std::cmp::PartialEq for Queue {
     fn eq(&self, other: &Self) -> bool {
-	self.family_idx == other.family_idx && self.queue_idx == other.queue_idx
+        self.family_idx == other.family_idx && self.queue_idx == other.queue_idx
     }
 }
 impl std::cmp::Eq for Queue {}
@@ -582,12 +582,12 @@ impl DeviceBuilder {
             application_version: Defaulted::new(vk::make_version(0, 1, 0)),
             window_size: Defaulted::new((640, 480)),
             extensions: Vec::new(),
-	    validation_enabled: Defaulted::new(false),
+            validation_enabled: Defaulted::new(false),
         }
     }
 
     pub fn get_extensions(&self) -> &[String] {
-	&self.extensions
+        &self.extensions
     }
 
     impl_defaulted_setter!(with_window_title, window_title, str);
@@ -605,7 +605,7 @@ impl DeviceBuilder {
 
     pub fn with_default_extensions(mut self) -> Self {
         self.extensions.push("VK_KHR_swapchain".to_string());
-	self.extensions.push("VK_EXT_descriptor_indexing".to_string());
+        self.extensions.push("VK_EXT_descriptor_indexing".to_string());
         self
     }
 
@@ -622,64 +622,64 @@ pub struct Device {
 
 impl Device {
     pub fn new(event_loop: &EventLoop<()>, builder: DeviceBuilder) -> anyhow::Result<Self> {
-	Ok(Self {
-	    inner: InnerDevice::new(event_loop, builder)?,
-	})
+        Ok(Self {
+            inner: InnerDevice::new(event_loop, builder)?,
+        })
     }
 
     pub fn check_mipmap_support(
-	&self,
-	image_format: vk::Format,
+        &self,
+        image_format: vk::Format,
     ) -> anyhow::Result<()>{
-	let format_properties = unsafe {
+        let format_properties = unsafe {
             self.inner.instance.get_physical_device_format_properties(self.inner.physical_device, image_format)
-	};
+        };
 
-	let is_sample_image_filter_linear_supported = format_properties
+        let is_sample_image_filter_linear_supported = format_properties
             .optimal_tiling_features
             .contains(vk::FormatFeatureFlags::SAMPLED_IMAGE_FILTER_LINEAR);
-	if !is_sample_image_filter_linear_supported {
+        if !is_sample_image_filter_linear_supported {
             Err(anyhow!("Texture image format does not support linear filtering"))
-	} else {
-	    Ok(())
-	}
+        } else {
+            Ok(())
+        }
     }
 
     #[allow(unused)]
     pub fn get_max_usable_sample_count(
-	&self,
+        &self,
     ) -> vk::SampleCountFlags {
-	let physical_device_properties =
+        let physical_device_properties =
             unsafe { self.inner.instance.get_physical_device_properties(self.inner.physical_device) };
-	let count = std::cmp::min(
+        let count = std::cmp::min(
             physical_device_properties
-		.limits
-		.framebuffer_color_sample_counts,
+                .limits
+                .framebuffer_color_sample_counts,
             physical_device_properties
-		.limits
-		.framebuffer_depth_sample_counts,
-	);
+                .limits
+                .framebuffer_depth_sample_counts,
+        );
 
-	if count.contains(vk::SampleCountFlags::TYPE_64) {
+        if count.contains(vk::SampleCountFlags::TYPE_64) {
             return vk::SampleCountFlags::TYPE_64;
-	}
-	if count.contains(vk::SampleCountFlags::TYPE_32) {
+        }
+        if count.contains(vk::SampleCountFlags::TYPE_32) {
             return vk::SampleCountFlags::TYPE_32;
-	}
-	if count.contains(vk::SampleCountFlags::TYPE_16) {
+        }
+        if count.contains(vk::SampleCountFlags::TYPE_16) {
             return vk::SampleCountFlags::TYPE_16;
-	}
-	if count.contains(vk::SampleCountFlags::TYPE_8) {
+        }
+        if count.contains(vk::SampleCountFlags::TYPE_8) {
             return vk::SampleCountFlags::TYPE_8;
-	}
-	if count.contains(vk::SampleCountFlags::TYPE_4) {
+        }
+        if count.contains(vk::SampleCountFlags::TYPE_4) {
             return vk::SampleCountFlags::TYPE_4;
-	}
-	if count.contains(vk::SampleCountFlags::TYPE_2) {
+        }
+        if count.contains(vk::SampleCountFlags::TYPE_2) {
             return vk::SampleCountFlags::TYPE_2;
-	}
+        }
 
-	vk::SampleCountFlags::TYPE_1
+        vk::SampleCountFlags::TYPE_1
     }
 
     pub fn wait_for_idle(&self) -> anyhow::Result<()>{
@@ -687,7 +687,7 @@ impl Device {
             self.inner.device
                 .device_wait_idle()?
         }
-	Ok(())
+        Ok(())
     }
 
     pub fn window_ref(&self) -> &winit::window::Window {
@@ -695,38 +695,38 @@ impl Device {
     }
 
     pub fn get_default_graphics_queue(&self) -> Rc<Queue> {
-	self.inner.get_default_graphics_queue()
+        self.inner.get_default_graphics_queue()
     }
 
     pub fn get_default_graphics_pool(&self) -> Rc<CommandPool> {
-	self.inner.get_default_graphics_pool()
+        self.inner.get_default_graphics_pool()
     }
 
     #[allow(unused)]
     pub fn get_default_present_queue(&self) -> Rc<Queue> {
-	self.inner.get_default_present_queue()
+        self.inner.get_default_present_queue()
     }
 
     pub fn get_default_transfer_queue(&self) -> Rc<Queue> {
-	self.inner.get_default_transfer_queue()
+        self.inner.get_default_transfer_queue()
     }
 
     pub fn get_default_transfer_pool(&self) -> Rc<CommandPool> {
-	self.inner.get_default_transfer_pool()
+        self.inner.get_default_transfer_pool()
     }
 
     #[allow(unused)]
     pub fn get_queues(&self) -> Vec<Rc<Queue>> {
-	let mut queues = vec![];
-	for q in &self.inner.queue_set.borrow().queues {
-	    queues.push(q.clone());
-	}
-	queues
+        let mut queues = vec![];
+        for q in &self.inner.queue_set.borrow().queues {
+            queues.push(q.clone());
+        }
+        queues
     }
 
     pub fn get_window_size(&self) -> (usize, usize) {
-	let size = self.inner.window.inner_size();
-	(size.width as usize, size.height as usize)
+        let size = self.inner.window.inner_size();
+        (size.width as usize, size.height as usize)
     }
 }
 
@@ -758,17 +758,17 @@ struct InnerDevice {
 
 impl std::fmt::Debug for InnerDevice {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-	f.debug_struct("InnerDevice")
-	    .field("window", &self.window)
-	    .field("surface", &self.surface)
-	    .field("physical_device", &self.physical_device)
-	    .finish()
+        f.debug_struct("InnerDevice")
+            .field("window", &self.window)
+            .field("surface", &self.surface)
+            .field("physical_device", &self.physical_device)
+            .finish()
     }
 }
 
 impl InnerDevice {
     pub fn new(event_loop: &EventLoop<()>, builder: DeviceBuilder) -> anyhow::Result<Rc<Self>> {
-	let window_title = builder.window_title.get_value();
+        let window_title = builder.window_title.get_value();
         let (window_width, window_height) = builder.window_size.get_value();
         let window = super::window::init_window(
             event_loop,
@@ -799,19 +799,19 @@ impl InnerDevice {
         let memory_properties = unsafe {
             instance.get_physical_device_memory_properties(physical_device)
         };
-	let queue_infos = get_queue_info(
-	    &instance,
-	    physical_device,
-	    surface,
-	    &surface_loader,
-	)?;
+        let queue_infos = get_queue_info(
+            &instance,
+            physical_device,
+            surface,
+            &surface_loader,
+        )?;
         let device = create_logical_device(
-	    &instance,
-	    physical_device,
-	    &queue_infos,
-	    builder.get_extensions(),
-	);
-	let swapchain_loader = ash::extensions::khr::Swapchain::new(&instance, &device);
+            &instance,
+            physical_device,
+            &queue_infos,
+            builder.get_extensions(),
+        );
+        let swapchain_loader = ash::extensions::khr::Swapchain::new(&instance, &device);
 
         let this = Rc::new(Self{
             window,
@@ -819,149 +819,149 @@ impl InnerDevice {
             instance,
             surface_loader,
             surface,
-	    swapchain_loader,
+            swapchain_loader,
             debug_utils_loader,
             debug_messenger,
-	    validation_enabled: *builder.validation_enabled.get_value(),
+            validation_enabled: *builder.validation_enabled.get_value(),
 
             physical_device,
             memory_properties,
             device: device.clone(),
-	    queue_set: RefCell::new(QueueSet {
-		queues: Vec::new(),
-		pools: Vec::new(),
-		default_graphics_queue_idx: 0,
-		default_present_queue_idx: 0,
-		default_transfer_queue_idx: 0,
-	    }),
+            queue_set: RefCell::new(QueueSet {
+                queues: Vec::new(),
+                pools: Vec::new(),
+                default_graphics_queue_idx: 0,
+                default_present_queue_idx: 0,
+                default_transfer_queue_idx: 0,
+            }),
         });
 
-	{
-	    let queues = get_queues_from_device(
-		this.clone(),
-		queue_infos,
-	    )?;
-	    let mut queue_set = this.queue_set.borrow_mut();
+        {
+            let queues = get_queues_from_device(
+                this.clone(),
+                queue_infos,
+            )?;
+            let mut queue_set = this.queue_set.borrow_mut();
 
-	    let mut maybe_graphics_queue_idx = None;
-	    let mut maybe_present_queue_idx = None;
-	    let mut maybe_transfer_queue_idx = None;
-	    for (idx, queue) in queues.iter().enumerate() {
-		if queue.can_do_graphics() {
-		    maybe_graphics_queue_idx = Some(idx)
-		}
-		if queue.can_present() {
-		    maybe_present_queue_idx = Some(idx)
-		}
-		if queue.can_do_transfer() {
-		    maybe_transfer_queue_idx = Some(idx)
-		}
-	    }
+            let mut maybe_graphics_queue_idx = None;
+            let mut maybe_present_queue_idx = None;
+            let mut maybe_transfer_queue_idx = None;
+            for (idx, queue) in queues.iter().enumerate() {
+                if queue.can_do_graphics() {
+                    maybe_graphics_queue_idx = Some(idx)
+                }
+                if queue.can_present() {
+                    maybe_present_queue_idx = Some(idx)
+                }
+                if queue.can_do_transfer() {
+                    maybe_transfer_queue_idx = Some(idx)
+                }
+            }
 
-	    let (default_graphics_queue_idx, default_present_queue_idx, default_transfer_queue_idx) =
-		match (maybe_graphics_queue_idx, maybe_present_queue_idx, maybe_transfer_queue_idx) {
-		    (Some(q1), Some(q2), Some(q3)) => (q1, q2, q3),
-		    _ => panic!("Unable to create all three of: graphics queue, present queue, transfer queue!"),
-		};
+            let (default_graphics_queue_idx, default_present_queue_idx, default_transfer_queue_idx) =
+                match (maybe_graphics_queue_idx, maybe_present_queue_idx, maybe_transfer_queue_idx) {
+                    (Some(q1), Some(q2), Some(q3)) => (q1, q2, q3),
+                    _ => panic!("Unable to create all three of: graphics queue, present queue, transfer queue!"),
+                };
 
-	    let mut pools = Vec::new();
-	    for q in queues.iter() {
-		pools.push(CommandPool::from_inner(
-		    Rc::clone(&this),
-		    Rc::clone(q),
-		    false,
-		    false,
-		)?);
-	    }
+            let mut pools = Vec::new();
+            for q in queues.iter() {
+                pools.push(CommandPool::from_inner(
+                    Rc::clone(&this),
+                    Rc::clone(q),
+                    false,
+                    false,
+                )?);
+            }
 
-	    queue_set.queues = queues;
-	    queue_set.pools = pools;
-	    queue_set.default_graphics_queue_idx = default_graphics_queue_idx;
-	    queue_set.default_present_queue_idx = default_present_queue_idx;
-	    queue_set.default_transfer_queue_idx = default_transfer_queue_idx;
-	}
+            queue_set.queues = queues;
+            queue_set.pools = pools;
+            queue_set.default_graphics_queue_idx = default_graphics_queue_idx;
+            queue_set.default_present_queue_idx = default_present_queue_idx;
+            queue_set.default_transfer_queue_idx = default_transfer_queue_idx;
+        }
 
-	Ok(this)
+        Ok(this)
     }
 
     fn get_default_graphics_queue(&self) -> Rc<Queue> {
-	let queue_set = self.queue_set.borrow();
-	Rc::clone(&queue_set.queues[queue_set.default_graphics_queue_idx])
+        let queue_set = self.queue_set.borrow();
+        Rc::clone(&queue_set.queues[queue_set.default_graphics_queue_idx])
     }
 
     fn get_default_graphics_pool(&self) -> Rc<CommandPool> {
-	let queue_set = self.queue_set.borrow();
-	Rc::clone(&queue_set.pools[queue_set.default_graphics_queue_idx])
+        let queue_set = self.queue_set.borrow();
+        Rc::clone(&queue_set.pools[queue_set.default_graphics_queue_idx])
     }
 
     #[allow(unused)]
     fn get_default_present_queue(&self) -> Rc<Queue> {
-	let queue_set = self.queue_set.borrow();
-	Rc::clone(&queue_set.queues[queue_set.default_present_queue_idx])
+        let queue_set = self.queue_set.borrow();
+        Rc::clone(&queue_set.queues[queue_set.default_present_queue_idx])
     }
 
     fn get_default_transfer_queue(&self) -> Rc<Queue> {
-	let queue_set = self.queue_set.borrow();
-	Rc::clone(&queue_set.queues[queue_set.default_transfer_queue_idx])
+        let queue_set = self.queue_set.borrow();
+        Rc::clone(&queue_set.queues[queue_set.default_transfer_queue_idx])
     }
 
     fn get_default_transfer_pool(&self) -> Rc<CommandPool> {
-	let queue_set = self.queue_set.borrow();
-	Rc::clone(&queue_set.pools[queue_set.default_transfer_queue_idx])
+        let queue_set = self.queue_set.borrow();
+        Rc::clone(&queue_set.pools[queue_set.default_transfer_queue_idx])
     }
 
     fn query_swapchain_support(&self) -> SwapChainSupport {
-	query_swapchain_support(
-	    self.physical_device,
-	    &self.surface_loader,
-	    self.surface,
-	)
+        query_swapchain_support(
+            self.physical_device,
+            &self.surface_loader,
+            self.surface,
+        )
     }
 
     fn create_swapchain(&self, swapchain_create_info: &vk::SwapchainCreateInfoKHR) -> anyhow::Result<vk::SwapchainKHR> {
-	Ok(unsafe {
+        Ok(unsafe {
             self.swapchain_loader
-		.create_swapchain(swapchain_create_info, None)?
-	})
+                .create_swapchain(swapchain_create_info, None)?
+        })
     }
 
     fn get_swapchain_images(&self, swapchain: vk::SwapchainKHR) -> anyhow::Result<Vec<vk::Image>> {
-	Ok(unsafe {
+        Ok(unsafe {
             self.swapchain_loader
-		.get_swapchain_images(swapchain)?
-	})
+                .get_swapchain_images(swapchain)?
+        })
     }
 
     fn destroy_swapchain(&self, swapchain: vk::SwapchainKHR) {
-	unsafe {
+        unsafe {
             self.swapchain_loader.destroy_swapchain(swapchain, None);
-	}
+        }
     }
 
     fn acquire_next_image(
-	&self,
-	swapchain: vk::SwapchainKHR,
-	timeout: u64,
-	semaphore: vk::Semaphore,
-	fence: vk::Fence
+        &self,
+        swapchain: vk::SwapchainKHR,
+        timeout: u64,
+        semaphore: vk::Semaphore,
+        fence: vk::Fence
     ) -> ash::prelude::VkResult<(u32, bool)> {
-	unsafe {
-	    self.swapchain_loader
-		.acquire_next_image(
+        unsafe {
+            self.swapchain_loader
+                .acquire_next_image(
                     swapchain,
                     timeout,
                     semaphore,
                     fence,
-		)
-	}
+                )
+        }
     }
 
     fn queue_present(
-	&self,
-	queue: Rc<Queue>,
-	present_info: &vk::PresentInfoKHR
+        &self,
+        queue: Rc<Queue>,
+        present_info: &vk::PresentInfoKHR
     ) -> ash::prelude::VkResult<bool> {
-	unsafe {
+        unsafe {
             self.swapchain_loader
                 .queue_present(queue.get(), present_info)
         }
@@ -970,25 +970,25 @@ impl InnerDevice {
 
 impl Drop for InnerDevice {
     fn drop(&mut self) {
-	unsafe {
-	    if let Ok(mut queue_set) = self.queue_set.try_borrow_mut() {
-		for q in queue_set.queues.drain(..) {
-		    if Rc::strong_count(&q) > 1 {
-			panic!("We are destroying a Device, but a queue is still in use!");
-		    }
-		}
-	    } else {
-		panic!("We are destroying a Device, but its queue set is borrowed!");
-	    }
+        unsafe {
+            if let Ok(mut queue_set) = self.queue_set.try_borrow_mut() {
+                for q in queue_set.queues.drain(..) {
+                    if Rc::strong_count(&q) > 1 {
+                        panic!("We are destroying a Device, but a queue is still in use!");
+                    }
+                }
+            } else {
+                panic!("We are destroying a Device, but its queue set is borrowed!");
+            }
             self.device.destroy_device(None);
             self.surface_loader.destroy_surface(self.surface, None);
 
             if self.validation_enabled {
-		self.debug_utils_loader
+                self.debug_utils_loader
                     .destroy_debug_utils_messenger(self.debug_messenger, None);
             }
             self.instance.destroy_instance(None);
-	}
+        }
     }
 }
 
@@ -1007,17 +1007,17 @@ fn create_logical_device(
     // Since the Vulkan API assumes they are, I don't think there are
     // any plausible cases where they won't be.
     for queue_info in queue_infos.iter() {
-	for _ in queue_priorities.len()..queue_info.queues.len() {
-	    queue_priorities.push(priority);
-	    priority = priority / 2_f32;
-	}
+        for _ in queue_priorities.len()..queue_info.queues.len() {
+            queue_priorities.push(priority);
+            priority = priority / 2_f32;
+        }
         queue_create_infos.push(vk::DeviceQueueCreateInfo{
-	    s_type: vk::StructureType::DEVICE_QUEUE_CREATE_INFO,
-	    p_next: ptr::null(),
-	    flags: vk::DeviceQueueCreateFlags::empty(),
-	    queue_family_index: queue_info.family_idx,
-	    p_queue_priorities: queue_priorities.as_ptr(),
-	    queue_count: queue_info.queues.len() as u32,
+            s_type: vk::StructureType::DEVICE_QUEUE_CREATE_INFO,
+            p_next: ptr::null(),
+            flags: vk::DeviceQueueCreateFlags::empty(),
+            queue_family_index: queue_info.family_idx,
+            p_queue_priorities: queue_priorities.as_ptr(),
+            queue_count: queue_info.queues.len() as u32,
         });
     }
 
@@ -1027,25 +1027,25 @@ fn create_logical_device(
     physical_device_features.independent_blend = vk::TRUE;
 
     let mut imageless_framebuffer_features = vk::PhysicalDeviceImagelessFramebufferFeatures{
-	s_type: vk::StructureType::PHYSICAL_DEVICE_IMAGELESS_FRAMEBUFFER_FEATURES,
-	p_next: ptr::null_mut(),
-	..Default::default()
+        s_type: vk::StructureType::PHYSICAL_DEVICE_IMAGELESS_FRAMEBUFFER_FEATURES,
+        p_next: ptr::null_mut(),
+        ..Default::default()
     };
     imageless_framebuffer_features.imageless_framebuffer = vk::TRUE;
 
     let descriptor_indexing_features = {
-	let mut descriptor_indexing_features = vk::PhysicalDeviceDescriptorIndexingFeatures{
-	    s_type: vk::StructureType::PHYSICAL_DEVICE_DESCRIPTOR_INDEXING_FEATURES,
-	    p_next: (&mut imageless_framebuffer_features as *mut _) as *mut c_void,
-	    ..Default::default()
-	};
-	descriptor_indexing_features.runtime_descriptor_array = vk::TRUE;
-	//descriptor_indexing_features.shader_uniform_buffer_array_non_uniform_indexing = vk::TRUE;
-	descriptor_indexing_features.shader_sampled_image_array_non_uniform_indexing = vk::TRUE;
-	descriptor_indexing_features.shader_storage_buffer_array_non_uniform_indexing = vk::TRUE;
-	descriptor_indexing_features.shader_storage_image_array_non_uniform_indexing = vk::TRUE;
-	descriptor_indexing_features.descriptor_binding_partially_bound = vk::TRUE;
-	descriptor_indexing_features
+        let mut descriptor_indexing_features = vk::PhysicalDeviceDescriptorIndexingFeatures{
+            s_type: vk::StructureType::PHYSICAL_DEVICE_DESCRIPTOR_INDEXING_FEATURES,
+            p_next: (&mut imageless_framebuffer_features as *mut _) as *mut c_void,
+            ..Default::default()
+        };
+        descriptor_indexing_features.runtime_descriptor_array = vk::TRUE;
+        //descriptor_indexing_features.shader_uniform_buffer_array_non_uniform_indexing = vk::TRUE;
+        descriptor_indexing_features.shader_sampled_image_array_non_uniform_indexing = vk::TRUE;
+        descriptor_indexing_features.shader_storage_buffer_array_non_uniform_indexing = vk::TRUE;
+        descriptor_indexing_features.shader_storage_image_array_non_uniform_indexing = vk::TRUE;
+        descriptor_indexing_features.descriptor_binding_partially_bound = vk::TRUE;
+        descriptor_indexing_features
     };
 
     //physical_device_features.shader_uniform_buffer_array_dynamic_indexing = vk::TRUE;
@@ -1070,10 +1070,10 @@ fn create_logical_device(
     // All this crap because a vk struct INSISTS on using *const c_char!
     let mut extension_names_list = vec![];
     for ext in enabled_extensions.iter() {
-	extension_names_list.push(CString::new(ext.as_str()).unwrap());
+        extension_names_list.push(CString::new(ext.as_str()).unwrap());
     }
     for ext in extension_names_list.iter() {
-	enable_extension_names.push(ext.as_ptr());
+        enable_extension_names.push(ext.as_ptr());
     }
 
     let p_next: *const c_void = &descriptor_indexing_features as *const _ as *const _;
@@ -1122,28 +1122,28 @@ fn get_queue_info(
     surface_loader: &ash::extensions::khr::Surface,
 ) -> anyhow::Result<Vec<QueueInfo>> {
     let queue_families = unsafe {
-	instance.get_physical_device_queue_family_properties(physical_device)
+        instance.get_physical_device_queue_family_properties(physical_device)
     };
 
     let mut infos = vec![];
 
     for (i, queue_family) in queue_families.iter().enumerate() {
-	let mut queues = vec![];
-	for j in 0..queue_family.queue_count {
-	    queues.push(j as u32);
-	}
-	infos.push(QueueInfo{
-	    family_idx: i as u32,
-	    flags: queue_family.queue_flags,
-	    queues: queues,
-	    can_present: unsafe {
-		surface_loader.get_physical_device_surface_support(
-		    physical_device,
-		    i as u32,
-		    surface,
-		)?
-	    },
-	});
+        let mut queues = vec![];
+        for j in 0..queue_family.queue_count {
+            queues.push(j as u32);
+        }
+        infos.push(QueueInfo{
+            family_idx: i as u32,
+            flags: queue_family.queue_flags,
+            queues: queues,
+            can_present: unsafe {
+                surface_loader.get_physical_device_surface_support(
+                    physical_device,
+                    i as u32,
+                    surface,
+                )?
+            },
+        });
     }
 
     Ok(infos)
@@ -1155,20 +1155,20 @@ fn get_queues_from_device(
 ) -> anyhow::Result<Vec<Rc<Queue>>> {
     let mut queues = vec![];
     for queue_info in queue_infos.iter() {
-	if queue_info.queues.len() == 0 {
-	    println!("A queue family with no queues in it?  This driver is on crack!");
-	    continue;
-	}
+        if queue_info.queues.len() == 0 {
+            println!("A queue family with no queues in it?  This driver is on crack!");
+            continue;
+        }
 
-	for queue_idx in queue_info.queues.iter() {
-	    queues.push(Rc::new(Queue::new(
-		device.clone(),
-		queue_info.family_idx,
-		*queue_idx,
-		queue_info.flags,
-		queue_info.can_present,
-	    )?));
-	}
+        for queue_idx in queue_info.queues.iter() {
+            queues.push(Rc::new(Queue::new(
+                device.clone(),
+                queue_info.family_idx,
+                *queue_idx,
+                queue_info.flags,
+                queue_info.can_present,
+            )?));
+        }
     }
 
     Ok(queues)

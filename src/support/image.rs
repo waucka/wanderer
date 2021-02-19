@@ -74,30 +74,30 @@ pub struct Image {
 
 impl Image {
     pub fn new(device: &Device, builder: ImageBuilder) -> anyhow::Result<Self> {
-	Image::new_internal(device.inner.clone(), builder)
+        Image::new_internal(device.inner.clone(), builder)
     }
 
     pub (in super) fn from_vk_image(
-	device: Rc<InnerDevice>,
-	image: vk::Image,
-	extent: vk::Extent3D,
-	format: vk::Format,
-	image_type: vk::ImageType,
+        device: Rc<InnerDevice>,
+        image: vk::Image,
+        extent: vk::Extent3D,
+        format: vk::Format,
+        image_type: vk::ImageType,
     ) -> Self {
-	Self {
-	    device,
-	    img: image,
-	    mem: None,
-	    extent,
-	    format,
-	    image_type,
-	    layout: vk::ImageLayout::UNDEFINED,
-	}
+        Self {
+            device,
+            img: image,
+            mem: None,
+            extent,
+            format,
+            image_type,
+            layout: vk::ImageLayout::UNDEFINED,
+        }
     }
 
     pub (in super) fn new_internal(
-	device: Rc<InnerDevice>,
-	builder: ImageBuilder,
+        device: Rc<InnerDevice>,
+        builder: ImageBuilder,
     ) -> anyhow::Result<Self> {
         let image_type = *builder.image_type.get_value();
         let format = *builder.format.get_value();
@@ -118,17 +118,17 @@ impl Image {
                 height: dimensions[1],
                 depth: dimensions[2],
             },
-	    _ => panic!("Invalid image type (what did you do?)"),
+            _ => panic!("Invalid image type (what did you do?)"),
         };
 
-	let format_list_bs = vk::ImageFormatListCreateInfo{
-	    s_type: vk::StructureType::IMAGE_FORMAT_LIST_CREATE_INFO,
-	    p_next: ptr::null(),
-	    view_format_count: 1,
-	    p_view_formats: &format,
-	};
+        let format_list_bs = vk::ImageFormatListCreateInfo{
+            s_type: vk::StructureType::IMAGE_FORMAT_LIST_CREATE_INFO,
+            p_next: ptr::null(),
+            view_format_count: 1,
+            p_view_formats: &format,
+        };
 
-	let image_create_info = vk::ImageCreateInfo{
+        let image_create_info = vk::ImageCreateInfo{
             s_type: vk::StructureType::IMAGE_CREATE_INFO,
             p_next: (&format_list_bs as *const _) as *const c_void,
             flags: vk::ImageCreateFlags::empty(),
@@ -182,73 +182,73 @@ impl Image {
             extent,
             format,
             image_type,
-	    layout: vk::ImageLayout::UNDEFINED,
+            layout: vk::ImageLayout::UNDEFINED,
         })
     }
 
     pub fn transition_layout(
-	&mut self,
+        &mut self,
         old_layout: vk::ImageLayout,
         new_layout: vk::ImageLayout,
         mip_levels: u32,
     ) -> anyhow::Result<()> {
         CommandBuffer::run_oneshot_internal(
-	    self.device.clone(),
-	    self.device.get_default_graphics_pool(),
-	    |writer| {
-		let src_access_mask;
-		let dst_access_mask;
-		let source_stage;
-		let destination_stage;
-		let mut aspect_mask = vk::ImageAspectFlags::COLOR;
+            self.device.clone(),
+            self.device.get_default_graphics_pool(),
+            |writer| {
+                let src_access_mask;
+                let dst_access_mask;
+                let source_stage;
+                let destination_stage;
+                let mut aspect_mask = vk::ImageAspectFlags::COLOR;
 
-		if old_layout == vk::ImageLayout::UNDEFINED
+                if old_layout == vk::ImageLayout::UNDEFINED
                     && new_layout == vk::ImageLayout::TRANSFER_DST_OPTIMAL
-		{
+                {
                     src_access_mask = vk::AccessFlags::empty();
                     dst_access_mask = vk::AccessFlags::TRANSFER_WRITE;
                     source_stage = vk::PipelineStageFlags::TOP_OF_PIPE;
                     destination_stage = vk::PipelineStageFlags::TRANSFER;
-		} else if old_layout == vk::ImageLayout::TRANSFER_DST_OPTIMAL
+                } else if old_layout == vk::ImageLayout::TRANSFER_DST_OPTIMAL
                     && new_layout == vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL
-		{
+                {
                     src_access_mask = vk::AccessFlags::TRANSFER_WRITE;
                     dst_access_mask = vk::AccessFlags::SHADER_READ;
                     source_stage = vk::PipelineStageFlags::TRANSFER;
                     destination_stage = vk::PipelineStageFlags::FRAGMENT_SHADER;
-		} else if old_layout == vk::ImageLayout::UNDEFINED
-		    && new_layout == vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL
-		{
-		    src_access_mask = vk::AccessFlags::empty();
-		    dst_access_mask = vk::AccessFlags::COLOR_ATTACHMENT_WRITE;
-		    source_stage = vk::PipelineStageFlags::TOP_OF_PIPE;
-		    destination_stage = vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT;
-		} else if old_layout == vk::ImageLayout::UNDEFINED
-		    && new_layout == vk::ImageLayout::DEPTH_STENCIL_ATTACHMENT_OPTIMAL
-		{
-		    src_access_mask = vk::AccessFlags::empty();
-		    dst_access_mask = vk::AccessFlags::DEPTH_STENCIL_ATTACHMENT_WRITE;
-		    source_stage = vk::PipelineStageFlags::TOP_OF_PIPE;
-		    destination_stage = vk::PipelineStageFlags::ALL_GRAPHICS;
-		    aspect_mask = vk::ImageAspectFlags::DEPTH;
-		} else if old_layout == vk::ImageLayout::UNDEFINED
-		    && new_layout == vk::ImageLayout::GENERAL
-		{
-		    src_access_mask = vk::AccessFlags::empty();
-		    dst_access_mask = vk::AccessFlags::COLOR_ATTACHMENT_WRITE | vk::AccessFlags::INPUT_ATTACHMENT_READ;
-		    source_stage = vk::PipelineStageFlags::TOP_OF_PIPE;
-		    destination_stage = vk::PipelineStageFlags::ALL_GRAPHICS;
-		} else if old_layout == new_layout {
-		    return Ok(());
-		} else {
+                } else if old_layout == vk::ImageLayout::UNDEFINED
+                    && new_layout == vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL
+                {
+                    src_access_mask = vk::AccessFlags::empty();
+                    dst_access_mask = vk::AccessFlags::COLOR_ATTACHMENT_WRITE;
+                    source_stage = vk::PipelineStageFlags::TOP_OF_PIPE;
+                    destination_stage = vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT;
+                } else if old_layout == vk::ImageLayout::UNDEFINED
+                    && new_layout == vk::ImageLayout::DEPTH_STENCIL_ATTACHMENT_OPTIMAL
+                {
+                    src_access_mask = vk::AccessFlags::empty();
+                    dst_access_mask = vk::AccessFlags::DEPTH_STENCIL_ATTACHMENT_WRITE;
+                    source_stage = vk::PipelineStageFlags::TOP_OF_PIPE;
+                    destination_stage = vk::PipelineStageFlags::ALL_GRAPHICS;
+                    aspect_mask = vk::ImageAspectFlags::DEPTH;
+                } else if old_layout == vk::ImageLayout::UNDEFINED
+                    && new_layout == vk::ImageLayout::GENERAL
+                {
+                    src_access_mask = vk::AccessFlags::empty();
+                    dst_access_mask = vk::AccessFlags::COLOR_ATTACHMENT_WRITE | vk::AccessFlags::INPUT_ATTACHMENT_READ;
+                    source_stage = vk::PipelineStageFlags::TOP_OF_PIPE;
+                    destination_stage = vk::PipelineStageFlags::ALL_GRAPHICS;
+                } else if old_layout == new_layout {
+                    return Ok(());
+                } else {
                     return Err(anyhow::anyhow!(
-			"Unsupported layout transition {:?} -> {:?}",
-			old_layout,
-			new_layout,
-		    ));
-		}
+                        "Unsupported layout transition {:?} -> {:?}",
+                        old_layout,
+                        new_layout,
+                    ));
+                }
 
-		let image_barriers = [vk::ImageMemoryBarrier{
+                let image_barriers = [vk::ImageMemoryBarrier{
                     s_type: vk::StructureType::IMAGE_MEMORY_BARRIER,
                     p_next: ptr::null(),
                     src_access_mask,
@@ -259,13 +259,13 @@ impl Image {
                     dst_queue_family_index: vk::QUEUE_FAMILY_IGNORED,
                     image: self.img,
                     subresource_range: vk::ImageSubresourceRange{
-			aspect_mask,
-			base_mip_level: 0,
-			level_count: mip_levels,
-			base_array_layer: 0,
-			layer_count: 1,
+                        aspect_mask,
+                        base_mip_level: 0,
+                        level_count: mip_levels,
+                        base_array_layer: 0,
+                        layer_count: 1,
                     },
-		}];
+                }];
 
                 writer.pipeline_barrier(
                     source_stage,
@@ -275,22 +275,22 @@ impl Image {
                     &[],
                     &image_barriers,
                 );
-		Ok(())
+                Ok(())
             })?;
-	self.layout = new_layout;
-	Ok(())
+        self.layout = new_layout;
+        Ok(())
     }
 
     pub fn generate_mipmaps(
-	&mut self,
-	mip_levels: u32,
+        &mut self,
+        mip_levels: u32,
     ) -> anyhow::Result<()>{
-	use std::cmp::max;
+        use std::cmp::max;
         super::command_buffer::CommandBuffer::run_oneshot_internal(
-	    Rc::clone(&self.device),
-	    self.device.get_default_transfer_pool(),
-	    |writer| {
-		let mut image_barrier = vk::ImageMemoryBarrier{
+            Rc::clone(&self.device),
+            self.device.get_default_transfer_pool(),
+            |writer| {
+                let mut image_barrier = vk::ImageMemoryBarrier{
                     s_type: vk::StructureType::IMAGE_MEMORY_BARRIER,
                     p_next: ptr::null(),
                     src_access_mask: vk::AccessFlags::empty(),
@@ -301,18 +301,18 @@ impl Image {
                     dst_queue_family_index: vk::QUEUE_FAMILY_IGNORED,
                     image: self.img,
                     subresource_range: vk::ImageSubresourceRange{
-			aspect_mask: vk::ImageAspectFlags::COLOR,
-			base_mip_level: 0,
-			level_count: 1,
-			base_array_layer: 0,
-			layer_count: 1,
+                        aspect_mask: vk::ImageAspectFlags::COLOR,
+                        base_mip_level: 0,
+                        level_count: 1,
+                        base_array_layer: 0,
+                        layer_count: 1,
                     },
-		};
+                };
 
-		let mut mip_width = self.extent.width as i32;
-		let mut mip_height = self.extent.height as i32;
+                let mut mip_width = self.extent.width as i32;
+                let mut mip_height = self.extent.height as i32;
 
-		for i in 1..mip_levels {
+                for i in 1..mip_levels {
                     image_barrier.subresource_range.base_mip_level = i - 1;
                     image_barrier.old_layout = vk::ImageLayout::TRANSFER_DST_OPTIMAL;
                     image_barrier.new_layout = vk::ImageLayout::TRANSFER_SRC_OPTIMAL;
@@ -320,141 +320,141 @@ impl Image {
                     image_barrier.dst_access_mask = vk::AccessFlags::TRANSFER_READ;
 
                     writer.pipeline_barrier(
-			vk::PipelineStageFlags::TRANSFER,
-			vk::PipelineStageFlags::TRANSFER,
-			vk::DependencyFlags::empty(),
-			&[],
-			&[],
-			&[image_barrier.clone()],
+                        vk::PipelineStageFlags::TRANSFER,
+                        vk::PipelineStageFlags::TRANSFER,
+                        vk::DependencyFlags::empty(),
+                        &[],
+                        &[],
+                        &[image_barrier.clone()],
                     );
 
                     let blits = [vk::ImageBlit{
-			src_subresource: vk::ImageSubresourceLayers{
+                        src_subresource: vk::ImageSubresourceLayers{
                             aspect_mask: vk::ImageAspectFlags::COLOR,
                             mip_level: i - 1,
                             base_array_layer: 0,
                             layer_count: 1,
-			},
-			src_offsets: [
+                        },
+                        src_offsets: [
                             vk::Offset3D{ x: 0, y: 0, z: 0 },
                             vk::Offset3D{
-				x: mip_width,
-				y: mip_height,
-				z: 1,
+                                x: mip_width,
+                                y: mip_height,
+                                z: 1,
                             },
-			],
-			dst_subresource: vk::ImageSubresourceLayers{
+                        ],
+                        dst_subresource: vk::ImageSubresourceLayers{
                             aspect_mask: vk::ImageAspectFlags::COLOR,
                             mip_level: i,
                             base_array_layer: 0,
                             layer_count: 1,
-			},
-			dst_offsets: [
+                        },
+                        dst_offsets: [
                             vk::Offset3D{ x: 0, y: 0, z: 0 },
                             vk::Offset3D{
-				x: max(mip_width / 2, 1),
-				y: max(mip_height / 2, 1),
-				z: 1,
+                                x: max(mip_width / 2, 1),
+                                y: max(mip_height / 2, 1),
+                                z: 1,
                             },
-			],
+                        ],
                     }];
 
-		    unsafe {
-			writer.blit_image_no_deps(
-			    self,
-			    vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
-			    self,
-			    vk::ImageLayout::TRANSFER_DST_OPTIMAL,
-			    &blits,
-			    vk::Filter::LINEAR,
-			);
-		    }
+                    unsafe {
+                        writer.blit_image_no_deps(
+                            self,
+                            vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
+                            self,
+                            vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+                            &blits,
+                            vk::Filter::LINEAR,
+                        );
+                    }
 
                     image_barrier.old_layout = vk::ImageLayout::TRANSFER_SRC_OPTIMAL;
                     image_barrier.new_layout = vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL;
                     image_barrier.src_access_mask = vk::AccessFlags::TRANSFER_READ;
                     image_barrier.dst_access_mask = vk::AccessFlags::SHADER_READ;
 
-		    writer.pipeline_barrier(
-			vk::PipelineStageFlags::TRANSFER,
-			vk::PipelineStageFlags::FRAGMENT_SHADER,
-			vk::DependencyFlags::empty(),
-			&[],
-			&[],
-			&[image_barrier.clone()],
-		    );
+                    writer.pipeline_barrier(
+                        vk::PipelineStageFlags::TRANSFER,
+                        vk::PipelineStageFlags::FRAGMENT_SHADER,
+                        vk::DependencyFlags::empty(),
+                        &[],
+                        &[],
+                        &[image_barrier.clone()],
+                    );
 
                     mip_width = max(mip_width / 2, 1);
                     mip_height = max(mip_height / 2, 1);
-		}
+                }
 
-		image_barrier.subresource_range.base_mip_level = mip_levels - 1;
-		image_barrier.old_layout = vk::ImageLayout::TRANSFER_DST_OPTIMAL;
-		image_barrier.new_layout = vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL;
-		image_barrier.src_access_mask = vk::AccessFlags::TRANSFER_WRITE;
-		image_barrier.dst_access_mask = vk::AccessFlags::SHADER_READ;
+                image_barrier.subresource_range.base_mip_level = mip_levels - 1;
+                image_barrier.old_layout = vk::ImageLayout::TRANSFER_DST_OPTIMAL;
+                image_barrier.new_layout = vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL;
+                image_barrier.src_access_mask = vk::AccessFlags::TRANSFER_WRITE;
+                image_barrier.dst_access_mask = vk::AccessFlags::SHADER_READ;
 
-		writer.pipeline_barrier(
-		    vk::PipelineStageFlags::TRANSFER,
-		    vk::PipelineStageFlags::FRAGMENT_SHADER,
-		    vk::DependencyFlags::empty(),
-		    &[],
-		    &[],
-		    &[image_barrier.clone()],
-		);
-		Ok(())
+                writer.pipeline_barrier(
+                    vk::PipelineStageFlags::TRANSFER,
+                    vk::PipelineStageFlags::FRAGMENT_SHADER,
+                    vk::DependencyFlags::empty(),
+                    &[],
+                    &[],
+                    &[image_barrier.clone()],
+                );
+                Ok(())
             })?;
 
-	self.layout = vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL;
+        self.layout = vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL;
 
-	Ok(())
+        Ok(())
     }
 
     #[allow(unused)]
     pub fn copy_buffer(
         buffer: Rc<UploadSourceBuffer>,
-	dst_img: Rc<Image>,
+        dst_img: Rc<Image>,
     ) -> anyhow::Result<()> {
-	CommandBuffer::run_oneshot_internal(
-	    Rc::clone(&dst_img.device),
-	    dst_img.device.get_default_transfer_pool(),
-	    |writer| {
-		writer.copy_buffer_to_image(
-		    Rc::clone(&buffer),
-		    Rc::clone(&dst_img),
-		);
-		Ok(())
+        CommandBuffer::run_oneshot_internal(
+            Rc::clone(&dst_img.device),
+            dst_img.device.get_default_transfer_pool(),
+            |writer| {
+                writer.copy_buffer_to_image(
+                    Rc::clone(&buffer),
+                    Rc::clone(&dst_img),
+                );
+                Ok(())
             })
     }
 
     pub (in super) unsafe fn copy_buffer_no_deps(
         buffer: &UploadSourceBuffer,
-	dst_img: &Image,
+        dst_img: &Image,
     ) -> anyhow::Result<()> {
-	CommandBuffer::run_oneshot_internal(
-	    Rc::clone(&dst_img.device),
-	    dst_img.device.get_default_transfer_pool(),
-	    |writer| {
-		writer.copy_buffer_to_image_no_deps(
-		    buffer,
-		    dst_img,
-		);
-		Ok(())
+        CommandBuffer::run_oneshot_internal(
+            Rc::clone(&dst_img.device),
+            dst_img.device.get_default_transfer_pool(),
+            |writer| {
+                writer.copy_buffer_to_image_no_deps(
+                    buffer,
+                    dst_img,
+                );
+                Ok(())
             })
     }
 }
 
 impl Drop for Image {
     fn drop(&mut self) {
-	unsafe {
-	    //println!("Dropping image {:?}", self.img);
-	    if let Some(mem) = self.mem {
-		// If we don't have the memory for it, then we aren't
-		// responsible for destroying it.
-		self.device.device.destroy_image(self.img, None);
-		self.device.device.free_memory(mem, None);
-	    }
-	}
+        unsafe {
+            //println!("Dropping image {:?}", self.img);
+            if let Some(mem) = self.mem {
+                // If we don't have the memory for it, then we aren't
+                // responsible for destroying it.
+                self.device.device.destroy_image(self.img, None);
+                self.device.device.free_memory(mem, None);
+            }
+        }
     }
 }
 
@@ -477,7 +477,7 @@ impl ImageView {
                 vk::ImageType::TYPE_1D => vk::ImageViewType::TYPE_1D,
                 vk::ImageType::TYPE_2D => vk::ImageViewType::TYPE_2D,
                 vk::ImageType::TYPE_3D => vk::ImageViewType::TYPE_3D,
-		_ => panic!("Invalid image type (what did you do?)"),
+                _ => panic!("Invalid image type (what did you do?)"),
             },
             format: image.format,
             components: vk::ComponentMapping{
@@ -508,9 +508,9 @@ impl ImageView {
 
 impl Drop for ImageView {
     fn drop(&mut self) {
-	//println!("Dropping image view {:?}", self.view);
-	unsafe {
+        //println!("Dropping image view {:?}", self.view);
+        unsafe {
             self.device.device.destroy_image_view(self.view, None);
-	}
+        }
     }
 }

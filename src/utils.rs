@@ -21,11 +21,11 @@ pub fn vk_to_string(raw_string_array: &[c_char]) -> String {
 pub struct NullVertex {}
 impl super::support::shader::Vertex for NullVertex {
     fn get_binding_description() -> Vec<vk::VertexInputBindingDescription> {
-	Vec::new()
+        Vec::new()
     }
 
     fn get_attribute_descriptions() -> Vec<vk::VertexInputAttributeDescription> {
-	Vec::new()
+        Vec::new()
     }
 }
 
@@ -36,29 +36,29 @@ pub struct Matrix4f {
 
 impl AsRef<Matrix4<f32>> for Matrix4f {
     fn as_ref(&self) -> &Matrix4<f32> {
-	&self.inner
+        &self.inner
     }
 }
 
 impl AsMut<Matrix4<f32>> for Matrix4f {
     fn as_mut(&mut self) -> &mut Matrix4<f32> {
-	&mut self.inner
+        &mut self.inner
     }
 }
 
 impl From<Matrix4<f32>> for Matrix4f {
     fn from(other: Matrix4<f32>) -> Self {
-	Self{
-	    inner: other,
-	}
+        Self{
+            inner: other,
+        }
     }
 }
 
 impl From<[[f32; 4]; 4]> for Matrix4f {
     fn from(other: [[f32; 4]; 4]) -> Self {
-	Self{
-	    inner: other.into(),
-	}
+        Self{
+            inner: other.into(),
+        }
     }
 }
 
@@ -70,9 +70,9 @@ impl Into<Matrix4<f32>> for Matrix4f {
 
 impl Default for Matrix4f {
     fn default() -> Self {
-	Self{
-	    inner: Matrix4::from_scale(1.0),
-	}
+        Self{
+            inner: Matrix4::from_scale(1.0),
+        }
     }
 }
 
@@ -82,15 +82,15 @@ unsafe impl AsStd140 for Matrix4f {
 
     fn std140(&self) -> Self::Std140
     where
-	Self::Std140: Sized
+        Self::Std140: Sized
     {
-	let converted: glsl_layout::mat4x4 = [
-	    [self.inner.x.x, self.inner.x.y, self.inner.x.z, self.inner.x.w],
-	    [self.inner.y.x, self.inner.y.y, self.inner.y.z, self.inner.y.w],
-	    [self.inner.z.x, self.inner.z.y, self.inner.z.z, self.inner.z.w],
-	    [self.inner.w.x, self.inner.w.y, self.inner.w.z, self.inner.w.w],
-	].into();
-	converted
+        let converted: glsl_layout::mat4x4 = [
+            [self.inner.x.x, self.inner.x.y, self.inner.x.z, self.inner.x.w],
+            [self.inner.y.x, self.inner.y.y, self.inner.y.z, self.inner.y.w],
+            [self.inner.z.x, self.inner.z.y, self.inner.z.z, self.inner.z.w],
+            [self.inner.w.x, self.inner.w.y, self.inner.w.z, self.inner.w.w],
+        ].into();
+        converted
     }
 }
 
@@ -101,29 +101,29 @@ pub struct Vector4f {
 
 impl AsRef<Vector4<f32>> for Vector4f {
     fn as_ref(&self) -> &Vector4<f32> {
-	&self.inner
+        &self.inner
     }
 }
 
 impl AsMut<Vector4<f32>> for Vector4f {
     fn as_mut(&mut self) -> &mut Vector4<f32> {
-	&mut self.inner
+        &mut self.inner
     }
 }
 
 impl From<Vector4<f32>> for Vector4f {
     fn from(other: Vector4<f32>) -> Self {
-	Self{
-	    inner: other,
-	}
+        Self{
+            inner: other,
+        }
     }
 }
 
 impl From<[f32; 4]> for Vector4f {
     fn from(other: [f32; 4]) -> Self {
-	Self{
-	    inner: other.into(),
-	}
+        Self{
+            inner: other.into(),
+        }
     }
 }
 
@@ -135,9 +135,9 @@ impl Into<Vector4<f32>> for Vector4f {
 
 impl Default for Vector4f {
     fn default() -> Self {
-	Self{
-	    inner: Vector4::new(0.0, 0.0, 0.0, 0.0),
-	}
+        Self{
+            inner: Vector4::new(0.0, 0.0, 0.0, 0.0),
+        }
     }
 }
 
@@ -147,15 +147,15 @@ unsafe impl AsStd140 for Vector4f {
 
     fn std140(&self) -> Self::Std140
     where
-	Self::Std140: Sized
+        Self::Std140: Sized
     {
-	let converted: glsl_layout::vec4 = [
-	    self.inner.x,
-	    self.inner.y,
-	    self.inner.z,
-	    self.inner.w,
-	].into();
-	converted
+        let converted: glsl_layout::vec4 = [
+            self.inner.x,
+            self.inner.y,
+            self.inner.z,
+            self.inner.w,
+        ].into();
+        converted
     }
 }
 
@@ -166,37 +166,37 @@ pub struct Vector2f {
 
 impl Vector2f {
     pub fn new(x: f32, y: f32) -> Self {
-	Self{
-	    inner: Vector2::new(x, y),
-	}
+        Self{
+            inner: Vector2::new(x, y),
+        }
     }
 }
 
 impl AsRef<Vector2<f32>> for Vector2f {
     fn as_ref(&self) -> &Vector2<f32> {
-	&self.inner
+        &self.inner
     }
 }
 
 impl AsMut<Vector2<f32>> for Vector2f {
     fn as_mut(&mut self) -> &mut Vector2<f32> {
-	&mut self.inner
+        &mut self.inner
     }
 }
 
 impl From<Vector2<f32>> for Vector2f {
     fn from(other: Vector2<f32>) -> Self {
-	Self{
-	    inner: other,
-	}
+        Self{
+            inner: other,
+        }
     }
 }
 
 impl From<[f32; 2]> for Vector2f {
     fn from(other: [f32; 2]) -> Self {
-	Self{
-	    inner: other.into(),
-	}
+        Self{
+            inner: other.into(),
+        }
     }
 }
 
@@ -208,9 +208,9 @@ impl Into<Vector2<f32>> for Vector2f {
 
 impl Default for Vector2f {
     fn default() -> Self {
-	Self{
-	    inner: Vector2::new(0.0, 0.0),
-	}
+        Self{
+            inner: Vector2::new(0.0, 0.0),
+        }
     }
 }
 
@@ -220,12 +220,12 @@ unsafe impl AsStd140 for Vector2f {
 
     fn std140(&self) -> Self::Std140
     where
-	Self::Std140: Sized
+        Self::Std140: Sized
     {
-	let converted: glsl_layout::vec2 = [
-	    self.inner.x,
-	    self.inner.y,
-	].into();
-	converted
+        let converted: glsl_layout::vec2 = [
+            self.inner.x,
+            self.inner.y,
+        ].into();
+        converted
     }
 }

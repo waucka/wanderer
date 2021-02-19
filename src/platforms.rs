@@ -58,11 +58,11 @@ pub fn required_extension_names() -> Vec<*const i8> {
 #[cfg(all(unix, not(target_os = "android"), not(target_os = "macos")))]
 pub fn optional_extension_names() -> Vec<*const i8> {
     if std::env::var("WANDERER_FORCE_X11") == Ok("y".to_string()) {
-	vec![]
+        vec![]
     } else {
-	vec![
+        vec![
             WaylandSurface::name().as_ptr(),
-	]
+        ]
     }
 }
 // ------------------------------------------------------------------------
@@ -119,18 +119,18 @@ pub unsafe fn create_surface<E: EntryV1_0, I: InstanceV1_0>(
     window: &winit::window::Window,
 ) -> anyhow::Result<vk::SurfaceKHR> {
     if std::env::var("WANDERER_FORCE_X11") == Ok("y".to_string()) {
-	create_x11_surface(entry, instance, window)
+        create_x11_surface(entry, instance, window)
     } else {
-	match create_wayland_surface(entry, instance, window) {
-	    Ok(surface) => {
-		println!("Created a Wayland surface");
-		Ok(surface)
-	    },
-	    Err(_) => {
-		println!("Failed to create Wayland surface.  Trying X11...");
-		create_x11_surface(entry, instance, window)
-	    },
-	}
+        match create_wayland_surface(entry, instance, window) {
+            Ok(surface) => {
+                println!("Created a Wayland surface");
+                Ok(surface)
+            },
+            Err(_) => {
+                println!("Failed to create Wayland surface.  Trying X11...");
+                create_x11_surface(entry, instance, window)
+            },
+        }
     }
 }
 
