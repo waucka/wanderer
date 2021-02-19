@@ -182,22 +182,36 @@ impl UniformDataItem for UniformDataItemRadio {
 }
 
 pub struct UniformData {
-    items: RefCell<HashMap<String, Box<dyn UniformDataItem>>>,
+    items: RefCell<HashMap<String, (String, Box<dyn UniformDataItem>)>>,
+    order: RefCell<Vec<String>>,
 }
 
 impl UniformData {
-    pub fn new(items: HashMap<String, Box<dyn UniformDataItem>>) -> Self {
+    pub fn new() -> Self {
         Self{
-            items: RefCell::new(items),
+            items: RefCell::new(HashMap::new()),
+            order: RefCell::new(Vec::new()),
         }
     }
 
-    fn get_items_mut(&self) -> std::cell::RefMut<HashMap<String, Box<dyn UniformDataItem>>> {
+    pub fn add<T: UniformDataItem + 'static>(&mut self, name: &str, description: &str, item: T) {
+        self.items.borrow_mut().insert(name.to_owned(), (description.to_owned(), Box::new(item)));
+        self.order.borrow_mut().push(name.to_owned());
+    }
+
+    pub fn get_order(&self) -> std::cell::Ref<Vec<String>> {
+        self.order.borrow()
+    }
+
+    fn get_items_mut(&self) -> std::cell::RefMut<HashMap<String, (String, Box<dyn UniformDataItem>)>> {
         self.items.borrow_mut()
     }
 
-    pub fn get_items(&self) -> std::cell::Ref<HashMap<String, Box<dyn UniformDataItem>>> {
-        self.items.borrow()
+    pub fn get_value(&self, name: &str) -> Option<UniformDataVar> {
+        match self.items.borrow().get(name) {
+            Some((_, item)) => Some(item.get_value()),
+            None => None,
+        }
     }
 }
 
@@ -226,6 +240,7 @@ impl UIApp for UniformTwiddler {
 
     fn update(&self, ctx: &egui::CtxRef, app_ctx: &mut AppContext) {
         let mut items = self.uniform_data.get_items_mut();
+        let order = self.uniform_data.get_order();
         egui::Window::new(&self.title)
             .scroll(true)
             .title_bar(true)
@@ -234,10 +249,15 @@ impl UIApp for UniformTwiddler {
                     .striped(true)
                     .max_col_width(ui.available_width())
                     .show(ui, |ui| {
-                        for (name, value) in items.iter_mut() {
-                            ui.label(name);
-                            value.ui(ui);
-                            ui.end_row();
+                        for name in order.iter() {
+                            match items.get_mut(name) {
+                                Some((desc, value)) => {
+                                    ui.label(desc.clone());
+                                    value.ui(ui);
+                                    ui.end_row();
+                                },
+                                None => (),
+                            }
                         }
                     });
             });

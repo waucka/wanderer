@@ -76,32 +76,29 @@ struct UniformBufferObject {
 
 impl UniformBufferObject {
     fn get_twiddler_data(&self) -> Rc<ui_app::UniformData> {
-        let mut items: HashMap<String, Box<dyn ui_app::UniformDataItem>> = HashMap::new();
-        items.insert(
-            "use_parallax".to_owned(),
-            Box::new(ui_app::UniformDataItemBool::new(self.use_parallax.into())),
+        let mut data = ui_app::UniformData::new();
+        data.add(
+            "use_parallax",
+            "Use parallax",
+            ui_app::UniformDataItemBool::new(self.use_parallax.into()),
         );
-        items.insert(
-            "use_ao".to_owned(),
-            Box::new(ui_app::UniformDataItemBool::new(self.use_ao.into())),
+        data.add(
+            "use_ao",
+            "Use ambient occlusion textures",
+            ui_app::UniformDataItemBool::new(self.use_ao.into()),
         );
-        Rc::new(ui_app::UniformData::new(items))
+        Rc::new(data)
     }
 
     fn set_data(&mut self, twiddler: Rc<ui_app::UniformTwiddler>) {
         let uniform_data = twiddler.get_uniform_data();
-        let items = uniform_data.get_items();
 
-        if let Some(item) = items.get("use_parallax") {
-            if let ui_app::UniformDataVar::Bool(use_parallax) = item.get_value() {
-                self.use_parallax = use_parallax.into();
-            }
+        if let Some(ui_app::UniformDataVar::Bool(use_parallax)) = uniform_data.get_value("use_parallax") {
+            self.use_parallax = use_parallax.into();
         }
 
-        if let Some(item) = items.get("use_ao") {
-            if let ui_app::UniformDataVar::Bool(use_ao) = item.get_value() {
-                self.use_ao = use_ao.into();
-            }
+        if let Some(ui_app::UniformDataVar::Bool(use_ao)) = uniform_data.get_value("use_ao") {
+            self.use_ao = use_ao.into();
         }
     }
 }
@@ -118,18 +115,21 @@ struct HdrControlUniform {
 
 impl HdrControlUniform {
     fn get_twiddler_data(&self) -> Rc<ui_app::UniformData> {
-        let mut items: HashMap<String, Box<dyn ui_app::UniformDataItem>> = HashMap::new();
-        items.insert(
-            "exposure".to_owned(),
-            Box::new(ui_app::UniformDataItemSliderSFloat::new(self.exposure, 0.00001..=2.0)),
+        let mut data = ui_app::UniformData::new();
+        data.add(
+            "exposure",
+            "Exposure",
+            ui_app::UniformDataItemSliderSFloat::new(self.exposure, 0.00001..=10.0),
         );
-        items.insert(
-            "gamma".to_owned(),
-            Box::new(ui_app::UniformDataItemSliderSFloat::new(self.gamma, 1.0..=5.0)),
+        data.add(
+            "gamma",
+            "Gamma",
+            ui_app::UniformDataItemSliderSFloat::new(self.gamma, 1.0..=5.0),
         );
-        items.insert(
-            "algo".to_owned(),
-            Box::new(ui_app::UniformDataItemRadio::new(
+        data.add(
+            "algo",
+            "Tonemapping algorithm",
+            ui_app::UniformDataItemRadio::new(
                 self.algo,
                 vec![
                     ("No-op".to_owned(), 0),
@@ -139,31 +139,24 @@ impl HdrControlUniform {
                     ("Uncharted 2".to_owned(), 4),
                     ("Invalid".to_owned(), 9001),
                 ],
-            )),
+            ),
         );
-        Rc::new(ui_app::UniformData::new(items))
+        Rc::new(data)
     }
 
     fn set_data(&mut self, twiddler: Rc<ui_app::UniformTwiddler>) {
         let uniform_data = twiddler.get_uniform_data();
-        let items = uniform_data.get_items();
 
-        if let Some(item) = items.get("exposure") {
-            if let ui_app::UniformDataVar::SFloat(exposure) = item.get_value() {
-                self.exposure = exposure;
-            }
+        if let Some(ui_app::UniformDataVar::SFloat(exposure)) = uniform_data.get_value("exposure") {
+            self.exposure = exposure;
         }
 
-        if let Some(item) = items.get("gamma") {
-            if let ui_app::UniformDataVar::SFloat(gamma) = item.get_value() {
-                self.gamma = gamma;
-            }
+        if let Some(ui_app::UniformDataVar::SFloat(gamma)) = uniform_data.get_value("gamma") {
+            self.gamma = gamma;
         }
 
-        if let Some(item) = items.get("algo") {
-            if let ui_app::UniformDataVar::UInt(algo) = item.get_value() {
-                self.algo = algo;
-            }
+        if let Some(ui_app::UniformDataVar::UInt(algo)) = uniform_data.get_value("algo") {
+            self.algo = algo;
         }
     }
 }
@@ -204,7 +197,7 @@ impl UIManager {
         let mut style: egui::style::Style = egui::style::Style::clone(&egui_ctx.style());
         style.spacing.slider_width = 200.0;
         style.visuals.widgets.noninteractive.bg_fill = egui::paint::color::Color32::from_rgba_unmultiplied(
-            32, 32, 32, 192,
+            32, 32, 32, 224,
         );
         egui_ctx.set_style(style);
         Ok(Self{
@@ -661,7 +654,7 @@ impl VulkanApp21 {
         let hdr_control_uniform = HdrControlUniform{
             exposure: 1.0,
             gamma: 2.2,
-            algo: 2,
+            algo: 4,
         };
 
         let hdr_twiddler_app = Rc::new(
