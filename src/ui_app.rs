@@ -96,13 +96,15 @@ impl UniformDataItem for UniformDataItemBool {
 pub struct UniformDataItemSliderUInt {
     value: u32,
     range: core::ops::RangeInclusive<u32>,
+    logarithmic: bool,
 }
 
 impl UniformDataItemSliderUInt {
-    pub fn new(value: u32, range: core::ops::RangeInclusive<u32>) -> Self {
+    pub fn new(value: u32, range: core::ops::RangeInclusive<u32>, logarithmic: bool) -> Self {
         Self{
             value,
             range,
+            logarithmic,
         }
     }
 }
@@ -111,7 +113,7 @@ impl UniformDataItem for UniformDataItemSliderUInt {
     fn ui(&mut self, ui: &mut egui::Ui) {
         ui.add(
             egui::Slider::u32(&mut self.value, self.range.clone())
-                .logarithmic(true)
+                .logarithmic(self.logarithmic)
                 // This is apparently the only way to get a numeric entry box
                 // to the right of the slider.  I have no idea why.
                 .text("")
@@ -126,13 +128,15 @@ impl UniformDataItem for UniformDataItemSliderUInt {
 pub struct UniformDataItemSliderSFloat {
     value: f32,
     range: core::ops::RangeInclusive<f32>,
+    logarithmic: bool,
 }
 
 impl UniformDataItemSliderSFloat {
-    pub fn new(value: f32, range: core::ops::RangeInclusive<f32>) -> Self {
+    pub fn new(value: f32, range: core::ops::RangeInclusive<f32>, logarithmic: bool) -> Self {
         Self{
             value,
             range,
+            logarithmic,
         }
     }
 }
@@ -141,7 +145,7 @@ impl UniformDataItem for UniformDataItemSliderSFloat {
     fn ui(&mut self, ui: &mut egui::Ui) {
         ui.add(
             egui::Slider::f32(&mut self.value, self.range.clone())
-                .logarithmic(true)
+                .logarithmic(self.logarithmic)
                 // This is apparently the only way to get a numeric entry box
                 // to the right of the slider.  I have no idea why.
                 .text("")

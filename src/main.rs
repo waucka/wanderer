@@ -108,7 +108,7 @@ struct HdrControlUniform {
     #[allow(unused)]
     exposure: f32,
     #[allow(unused)]
-    gamma: f32,
+    white_luminance: f32,
     #[allow(unused)]
     algo: u32,
 }
@@ -119,12 +119,12 @@ impl HdrControlUniform {
         data.add(
             "exposure",
             "Exposure",
-            ui_app::UniformDataItemSliderSFloat::new(self.exposure, 0.00001..=10.0),
+            ui_app::UniformDataItemSliderSFloat::new(self.exposure, -20.0..=20.0, false),
         );
         data.add(
-            "gamma",
-            "Gamma",
-            ui_app::UniformDataItemSliderSFloat::new(self.gamma, 1.0..=5.0),
+            "white_luminance",
+            "White luminance",
+            ui_app::UniformDataItemSliderSFloat::new(self.exposure, 0.00001..=100000.0, true),
         );
         data.add(
             "algo",
@@ -135,8 +135,9 @@ impl HdrControlUniform {
                     ("No-op".to_owned(), 0),
                     ("Linear".to_owned(), 1),
                     ("Reinhard simple".to_owned(), 2),
-                    ("Reinhard luma".to_owned(), 3),
+                    ("Reinhard enhanced".to_owned(), 3),
                     ("Uncharted 2".to_owned(), 4),
+                    ("ACES".to_owned(), 5),
                     ("Invalid".to_owned(), 9001),
                 ],
             ),
@@ -151,8 +152,8 @@ impl HdrControlUniform {
             self.exposure = exposure;
         }
 
-        if let Some(ui_app::UniformDataVar::SFloat(gamma)) = uniform_data.get_value("gamma") {
-            self.gamma = gamma;
+        if let Some(ui_app::UniformDataVar::SFloat(white_luminance)) = uniform_data.get_value("white_luminance") {
+            self.white_luminance = white_luminance;
         }
 
         if let Some(ui_app::UniformDataVar::UInt(algo)) = uniform_data.get_value("algo") {
@@ -485,7 +486,7 @@ impl VulkanApp21 {
             global_descriptor_bindings,
         )?;
 
-        let light_intensity = 100000.0;
+        let light_intensity = 10000.0;
         let global_uniform = UniformBufferObject{
             view: {
                 let view_matrix = Matrix4::look_at_dir(
@@ -652,8 +653,8 @@ impl VulkanApp21 {
         )?;
 
         let hdr_control_uniform = HdrControlUniform{
-            exposure: 1.0,
-            gamma: 2.2,
+            exposure: 0.0,
+            white_luminance: 4.0,
             algo: 4,
         };
 
