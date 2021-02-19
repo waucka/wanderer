@@ -109,7 +109,13 @@ impl UniformDataItemSliderUInt {
 
 impl UniformDataItem for UniformDataItemSliderUInt {
     fn ui(&mut self, ui: &mut egui::Ui) {
-	ui.add(egui::Slider::u32(&mut self.value, self.range.clone()));
+	ui.add(
+	    egui::Slider::u32(&mut self.value, self.range.clone())
+		.logarithmic(true)
+	        // This is apparently the only way to get a numeric entry box
+	        // to the right of the slider.  I have no idea why.
+		.text("")
+	);
     }
 
     fn get_value(&self) -> UniformDataVar {
@@ -133,7 +139,13 @@ impl UniformDataItemSliderSFloat {
 
 impl UniformDataItem for UniformDataItemSliderSFloat {
     fn ui(&mut self, ui: &mut egui::Ui) {
-	ui.add(egui::Slider::f32(&mut self.value, self.range.clone()));
+	ui.add(
+	    egui::Slider::f32(&mut self.value, self.range.clone())
+		.logarithmic(true)
+	        // This is apparently the only way to get a numeric entry box
+	        // to the right of the slider.  I have no idea why.
+		.text("")
+	);
     }
 
     fn get_value(&self) -> UniformDataVar {
@@ -216,14 +228,18 @@ impl UIApp for UniformTwiddler {
 	let mut items = self.uniform_data.get_items_mut();
 	egui::Window::new(&self.title)
 	    .scroll(true)
+	    .title_bar(true)
 	    .show(ctx, |ui| {
-		egui::Grid::new(format!("{}-grid", &self.title)).show(ui, |ui| {
-		    for (name, value) in items.iter_mut() {
-			ui.label(name);
-			value.ui(ui);
-			ui.end_row();
-		    }
-		});
+		egui::Grid::new(format!("{}-grid", &self.title))
+		    .striped(true)
+		    .max_col_width(ui.available_width())
+		    .show(ui, |ui| {
+			for (name, value) in items.iter_mut() {
+			    ui.label(name);
+			    value.ui(ui);
+			    ui.end_row();
+			}
+		    });
 	    });
     }
 }
@@ -434,6 +450,10 @@ impl UIAppRenderer {
 	let mut rendering_sets = vec![];
 	for clipped_mesh in meshes.iter() {
 	    let mesh = &clipped_mesh.1;
+	    if mesh.vertices.len() == 0 {
+		// I have no idea why egui sometimes gives me meshes with no vertices.
+		continue;
+	    }
 	    let vertex_buffer = Rc::new(VertexBuffer::new(device, &mesh.vertices)?);
 	    let index_buffer = Rc::new(IndexBuffer::new(device, &mesh.indices)?);
 	    let items: Vec<Rc<dyn DescriptorRef>> = vec![

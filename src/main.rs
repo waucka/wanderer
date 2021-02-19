@@ -121,7 +121,7 @@ impl HdrControlUniform {
 	let mut items: HashMap<String, Box<dyn ui_app::UniformDataItem>> = HashMap::new();
 	items.insert(
 	    "exposure".to_owned(),
-	    Box::new(ui_app::UniformDataItemSliderSFloat::new(self.exposure, 0.0..=2.0)),
+	    Box::new(ui_app::UniformDataItemSliderSFloat::new(self.exposure, 0.00001..=2.0)),
 	);
 	items.insert(
 	    "gamma".to_owned(),
@@ -135,6 +135,8 @@ impl HdrControlUniform {
 		    ("No-op".to_owned(), 0),
 		    ("Linear".to_owned(), 1),
 		    ("Reinhard simple".to_owned(), 2),
+		    ("Reinhard luma".to_owned(), 3),
+		    ("Uncharted 2".to_owned(), 4),
 		    ("Invalid".to_owned(), 9001),
 		],
 	    )),
@@ -200,6 +202,7 @@ impl UIManager {
     ) -> anyhow::Result<Self> {
 	let egui_ctx = egui::CtxRef::default();
 	let mut style: egui::style::Style = egui::style::Style::clone(&egui_ctx.style());
+	style.spacing.slider_width = 200.0;
 	style.visuals.widgets.noninteractive.bg_fill = egui::paint::color::Color32::from_rgba_unmultiplied(
 	    32, 32, 32, 192,
 	);
@@ -489,6 +492,7 @@ impl VulkanApp21 {
 	    global_descriptor_bindings,
 	)?;
 
+	let light_intensity = 100000.0;
 	let global_uniform = UniformBufferObject{
             view: {
 		let view_matrix = Matrix4::look_at_dir(
@@ -518,7 +522,7 @@ impl VulkanApp21 {
 		[0.0, 0.0, 0.0, 1.0].into(),
 	    ],
 	    light_colors: [
-		[500.0, 500.0, 500.0, 500.0].into(),
+		[light_intensity, light_intensity, light_intensity, light_intensity].into(),
 		[0.0, 0.0, 0.0, 0.0].into(),
 		[0.0, 0.0, 0.0, 0.0].into(),
 		[0.0, 0.0, 0.0, 0.0].into(),

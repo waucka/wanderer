@@ -75,6 +75,9 @@ impl Buffer {
         required_memory_flags: vk::MemoryPropertyFlags,
         sharing_mode: vk::SharingMode,
     ) -> anyhow::Result<Self> {
+	if size == 0 {
+	    return Err(anyhow!("Buffer size must be greater than zero."));
+	}
         let buffer_create_info = vk::BufferCreateInfo{
             s_type: vk::StructureType::BUFFER_CREATE_INFO,
             p_next: ptr::null(),
