@@ -728,6 +728,36 @@ impl Device {
         let size = self.inner.window.inner_size();
         (size.width as usize, size.height as usize)
     }
+
+    pub fn get_float_target_format(&self) -> anyhow::Result<vk::Format> {
+        let candidate_formats = [
+                vk::Format::R16G16B16_SFLOAT,
+                vk::Format::R16G16B16A16_SFLOAT,
+                vk::Format::R32G32B32_SFLOAT,
+                vk::Format::R32G32B32A32_SFLOAT,
+        ];
+
+        for candidate in &candidate_formats {
+            let ok = unsafe {
+                let res = self.inner.instance.get_physical_device_image_format_properties(
+                    self.inner.physical_device,
+                    *candidate,
+                    vk::ImageType::TYPE_2D,
+                    vk::ImageTiling::OPTIMAL,
+                    vk::ImageUsageFlags::COLOR_ATTACHMENT,
+                    vk::ImageCreateFlags::empty(),
+                );
+                match res {
+                    Ok(_) => true,
+                    Err(_) => false,
+                }
+            };
+            if ok {
+                return Ok(*candidate)
+            }
+        }
+        Err(anyhow!("Failed to find a suitable float target format"))
+    }
 }
 
 struct QueueSet {
@@ -998,22 +1028,6 @@ fn create_logical_device(
     queue_infos: &Vec<QueueInfo>,
     enabled_extensions: &[String],
 ) -> ash::Device {
-    let props = unsafe {
-        instance.get_physical_device_image_format_properties(
-            physical_device,
-            vk::Format::R16G16B16_SFLOAT,
-            vk::ImageType::TYPE_2D,
-            vk::ImageTiling::OPTIMAL,
-            vk::ImageUsageFlags::COLOR_ATTACHMENT,
-            vk::ImageCreateFlags::empty(),
-        ).unwrap()
-    };
-    dbg!(props.max_extent);
-    dbg!(props.max_mip_levels);
-    dbg!(props.max_array_layers);
-    dbg!(props.sample_counts);
-    dbg!(props.max_resource_size);
-
     let mut queue_create_infos = vec![];
     // This needs to be outside the loop to avoid use-after-free problems with the pointer
     // stuff going on in DeviceQueueCreateInfo below.

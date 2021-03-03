@@ -369,7 +369,7 @@ impl VulkanApp21 {
             vk::ImageUsageFlags::COLOR_ATTACHMENT |
             vk::ImageUsageFlags::INPUT_ATTACHMENT |
             vk::ImageUsageFlags::TRANSIENT_ATTACHMENT,
-            vk::Format::R16G16B16_SFLOAT,
+            device.get_float_target_format()?,
             vk::ImageAspectFlags::COLOR,
             vk::AttachmentLoadOp::CLEAR,
             vk::AttachmentStoreOp::STORE,
