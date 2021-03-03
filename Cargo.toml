@@ -30,3 +30,6 @@ glsl-layout = "0.3"
 egui = "0.9"
 renderdoc = "0.10"
 exr = "1.1"
+
+[target.'cfg(target_os = "windows")'.dependencies]
+winapi = { version = "0.3.5", features = ["windef", "libloaderapi"] }
