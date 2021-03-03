@@ -21,7 +21,7 @@ layout (set = 2, binding = 0, std140) uniform InstanceSpecificUBO {
   mat4 model;
 } instance_ubo;
 
-layout (location = 0) in VS_OUT {
+layout (location = 0) in FS_IN {
   vec2 fragTexCoord;
   vec3 fragPos;
   vec3 tangent_view_pos;

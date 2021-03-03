@@ -20,6 +20,175 @@ pub struct Texture {
 }
 
 impl Texture {
+    pub fn from_float_tex(
+        device: &Device,
+        path: &Path,
+    ) -> anyhow::Result<Self> {
+        let data_bytes = std::fs::read(path)?;
+        if data_bytes.len() % 4 != 0 {
+            return Err(anyhow!("Float texture is {} bytes long; which is not a multiple of 4.", data_bytes.len()));
+        }
+        let num_values = data_bytes.len() / 4;
+        let mip_levels = 1;
+        /*let data_float = Vec::with_capacity(num_values);
+        for i in 0..num_values {
+            data_float.push(f32::from_le_bytes([
+                data_bytes[i + 0],
+                data_bytes[i + 1],
+                data_bytes[i + 2],
+                data_bytes[i + 3],
+            ]));
+        }*/
+        let image_size =
+            (std::mem::size_of::<u8>() * data_bytes.len()) as vk::DeviceSize;
+        let upload_buffer = UploadSourceBuffer::new(device, image_size)?;
+        upload_buffer.copy_data(&data_bytes)?;
+
+        let mut image = Image::new(
+            device,
+            ImageBuilder::new1d(num_values as usize)
+                .with_mip_levels(mip_levels)
+                .with_num_samples(vk::SampleCountFlags::TYPE_1)
+                .with_format(vk::Format::R32G32B32_SFLOAT)
+                .with_tiling(vk::ImageTiling::OPTIMAL)
+                .with_usage(
+                    vk::ImageUsageFlags::TRANSFER_SRC |
+                    vk::ImageUsageFlags::TRANSFER_DST |
+                    vk::ImageUsageFlags::SAMPLED,
+                )
+                .with_required_memory_properties(vk::MemoryPropertyFlags::DEVICE_LOCAL)
+                .with_sharing_mode(vk::SharingMode::EXCLUSIVE)
+        )?;
+
+        image.transition_layout(
+            vk::ImageLayout::UNDEFINED,
+            vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+            mip_levels,
+        )?;
+
+        unsafe {
+            Image::copy_buffer_no_deps(&upload_buffer, &image)?;
+        }
+
+        image.transition_layout(
+            vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+            vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
+            mip_levels,
+        )?;
+
+        let image_view = Rc::new(ImageView::from_image(
+            &image,
+            vk::ImageAspectFlags::COLOR,
+            mip_levels,
+        )?);
+
+        let image = Rc::new(image);
+
+        Ok(Self{
+            image,
+            image_view,
+            mip_levels,
+        })
+    }
+
+    pub fn from_exr(
+        device: &Device,
+        path: &Path,
+    ) -> anyhow::Result<Self> {
+        let image = {
+            use exr::prelude::*;
+            read()
+                .no_deep_data()
+                .largest_resolution_level()
+                .specific_channels()
+                .required("R")
+                .required("G")
+                .required("B")
+                .collect_pixels(
+                    |resolution, _| {
+                        let num_values = resolution.width() * resolution.height() * 3;
+                        let empty_image = vec![0.0; num_values];
+                        empty_image
+                    },
+                    |pixel_vector, position, (r, g, b): (f32, f32, f32)| {
+                        println!(
+                            "[{}, {}] = ({}, {}, {})",
+                            position.x(), position.y(),
+                            r, g, b,
+                        );
+                        let y = position.y() + 1;
+                        pixel_vector[y * position.x() * 3 + 0] = r;
+                        pixel_vector[y * position.x() * 3 + 1] = g;
+                        pixel_vector[y * position.x() * 3 + 2] = b;
+                    },
+                )
+                .all_layers()
+                .all_attributes()
+                .from_file(path)?
+        };
+
+        let first_layer = match image.layer_data.first() {
+            Some(layer) => layer,
+            None => return Err(anyhow!("OpenEXR image {} contains no layers", path.display())),
+        };
+        let pixels = &first_layer.channel_data.pixels;
+        dbg!(pixels[pixels.len()-3]);
+        dbg!(pixels[pixels.len()-2]);
+        dbg!(pixels[pixels.len()-1]);
+
+        let image_size =
+            (std::mem::size_of::<f32>() * pixels.len()) as vk::DeviceSize;
+        let upload_buffer = UploadSourceBuffer::new(device, image_size)?;
+        upload_buffer.copy_data(pixels)?;
+
+        let mip_levels = 1;
+        let mut image = Image::new(
+            device,
+            ImageBuilder::new1d(pixels.len() / 3)
+                .with_mip_levels(mip_levels)
+                .with_num_samples(vk::SampleCountFlags::TYPE_1)
+                .with_format(vk::Format::R32G32B32_SFLOAT)
+                .with_tiling(vk::ImageTiling::OPTIMAL)
+                .with_usage(
+                    vk::ImageUsageFlags::TRANSFER_SRC |
+                    vk::ImageUsageFlags::TRANSFER_DST |
+                    vk::ImageUsageFlags::SAMPLED,
+                )
+                .with_required_memory_properties(vk::MemoryPropertyFlags::DEVICE_LOCAL)
+                .with_sharing_mode(vk::SharingMode::EXCLUSIVE)
+        )?;
+
+        image.transition_layout(
+            vk::ImageLayout::UNDEFINED,
+            vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+            mip_levels,
+        )?;
+
+        unsafe {
+            Image::copy_buffer_no_deps(&upload_buffer, &image)?;
+        }
+
+        image.transition_layout(
+            vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+            vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
+            mip_levels,
+        )?;
+
+        let image_view = Rc::new(ImageView::from_image(
+            &image,
+            vk::ImageAspectFlags::COLOR,
+            mip_levels,
+        )?);
+
+        let image = Rc::new(image);
+
+        Ok(Self{
+            image,
+            image_view,
+            mip_levels,
+        })
+    }
+
     pub fn from_egui(
         device: &Device,
         egui_texture: &Arc<egui::paint::Texture>,

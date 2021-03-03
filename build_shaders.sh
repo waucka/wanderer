@@ -10,3 +10,6 @@ glslangValidator -V hdr.frag.glsl $COMMON_ARGS -o hdr.frag.spv || exit 1
 
 glslangValidator -V ui.vert.glsl $COMMON_ARGS -o ui.vert.spv || exit 1
 glslangValidator -V ui.frag.glsl $COMMON_ARGS -o ui.frag.spv || exit 1
+
+glslangValidator -V star.vert.glsl $COMMON_ARGS -o star.vert.spv || exit 1
+glslangValidator -V star.frag.glsl $COMMON_ARGS -o star.frag.spv || exit 1

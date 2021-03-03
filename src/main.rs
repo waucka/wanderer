@@ -15,6 +15,7 @@ mod utils;
 mod support;
 mod scene;
 mod objects;
+mod star;
 mod models;
 mod ui_app;
 
@@ -41,7 +42,7 @@ use support::renderer::{
     Subpass,
     SubpassRef,
 };
-use support::texture::{Material};
+use support::texture::{Material, Texture};
 use support::buffer::{VertexBuffer/*, IndexBuffer*/, UniformBuffer};
 use objects::{StaticGeometryRenderer, PostProcessingStep};
 use scene::{Scene, Renderable};
@@ -617,8 +618,53 @@ impl VulkanApp21 {
             Matrix4::from_translation(Vector3::new(0.0, 0.0, 5.0)) * Matrix4::from_scale(0.5),
         )?;*/
 
+        let mut star_renderer = star::StarRenderer::new(
+            &device,
+            &global_descriptor_set_layout,
+            global_frame_data.extract(
+                |frame_data| {
+                    Ok(Rc::clone(&frame_data.descriptor_set))
+                }
+            )?,
+            //Rc::new(Texture::from_exr(&device, &Path::new("assets/textures/star_colors.exr"))?),
+            Rc::new(Texture::from_file(&device, &Path::new("assets/textures/star_colors.png"), true)?),
+            WINDOW_WIDTH,
+            WINDOW_HEIGHT,
+            &render_pass,
+            rendering_subpass.into(),
+            msaa_samples,
+        )?;
+        star_renderer.add(
+            &device,
+            &star::StarInfo::new(
+                [-50.0, 0.0, 5.0].into(),
+                44.13,
+                3900,
+                439.0,
+            ),
+        )?;
+        star_renderer.add(
+            &device,
+            &star::StarInfo::new(
+                [0.0, 0.0, 5.0].into(),
+                1.0,
+                5780,
+                1.0,
+            ),
+        )?;
+        star_renderer.add(
+            &device,
+            &star::StarInfo::new(
+                [7.0, 0.0, 5.0].into(),
+                3.8,
+                16400,
+                800.0,
+            ),
+        )?;
+
         let renderables: Vec<Rc<dyn Renderable>> = vec![
             Rc::new(viking_room_geometry),
+            Rc::new(star_renderer),
         ];
 
         let scene = Scene::new(
