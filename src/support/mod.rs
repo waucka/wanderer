@@ -998,6 +998,22 @@ fn create_logical_device(
     queue_infos: &Vec<QueueInfo>,
     enabled_extensions: &[String],
 ) -> ash::Device {
+    let props = unsafe {
+        instance.get_physical_device_image_format_properties(
+            physical_device,
+            vk::Format::R16G16B16_SFLOAT,
+            vk::ImageType::TYPE_2D,
+            vk::ImageTiling::OPTIMAL,
+            vk::ImageUsageFlags::COLOR_ATTACHMENT,
+            vk::ImageCreateFlags::empty(),
+        ).unwrap()
+    };
+    dbg!(props.max_extent);
+    dbg!(props.max_mip_levels);
+    dbg!(props.max_array_layers);
+    dbg!(props.sample_counts);
+    dbg!(props.max_resource_size);
+
     let mut queue_create_infos = vec![];
     // This needs to be outside the loop to avoid use-after-free problems with the pointer
     // stuff going on in DeviceQueueCreateInfo below.
