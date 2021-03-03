@@ -315,9 +315,13 @@ impl Texture {
             DynamicImage::ImageRgba8(_) => image_object.to_rgba8().into_raw(),
             _ => panic!("Unsupported image type (probably 16 bits per channel)"),
         };
-        let mip_levels = ((max(image_width, image_height) as f32)
-                          .log2()
-                          .floor() as u32) + 1;
+        let mip_levels = if mipmapped {
+            ((max(image_width, image_height) as f32)
+             .log2()
+             .floor() as u32) + 1
+        } else {
+            1
+        };
 
         if image_size <= 0 {
             panic!("Failed to load texture image");
