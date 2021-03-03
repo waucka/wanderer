@@ -395,11 +395,11 @@ impl UIAppRenderer {
         let vert_shader: VertexShader<egui::paint::Vertex> =
             VertexShader::from_spv_file(
                 device,
-                Path::new("./ui.vert.spv"),
+                Path::new("./assets/shaders/ui.vert.spv"),
             )?;
         let frag_shader = FragmentShader::from_spv_file(
             device,
-            Path::new("./ui.frag.spv"),
+            Path::new("./assets/shaders/ui.frag.spv"),
         )?;
 
         let pipeline = Rc::new(Pipeline::new(

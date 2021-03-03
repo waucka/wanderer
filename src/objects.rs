@@ -77,11 +77,11 @@ impl<V: Vertex + 'static> StaticGeometryRenderer<V> {
         let vert_shader: VertexShader<V> =
             VertexShader::from_spv_file(
                 device,
-                Path::new("./lighting.vert.spv"),
+                Path::new("./assets/shaders/lighting.vert.spv"),
             )?;
         let frag_shader = FragmentShader::from_spv_file(
             device,
-            Path::new("./lighting.frag.spv"),
+            Path::new("./assets/shaders/lighting.frag.spv"),
         )?;
 
         let uniform_buffer = Rc::new(UniformBuffer::new(
@@ -483,11 +483,11 @@ impl PostProcessingStep {
         let vert_shader: VertexShader<NullVertex> =
             VertexShader::from_spv_file(
                 device,
-                Path::new("./hdr.vert.spv"),
+                Path::new("./assets/shaders/hdr.vert.spv"),
             )?;
         let frag_shader = FragmentShader::from_spv_file(
             device,
-            Path::new("./hdr.frag.spv"),
+            Path::new("./assets/shaders/hdr.frag.spv"),
         )?;
 
         let set_layouts = [global_descriptor_set_layout];

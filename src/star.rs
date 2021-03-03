@@ -94,11 +94,11 @@ impl StarRenderer {
         let vert_shader: VertexShader<SimpleVertex> =
             VertexShader::from_spv_file(
                 device,
-                Path::new("./star.vert.spv"),
+                Path::new("./assets/shaders/star.vert.spv"),
             )?;
         let frag_shader = FragmentShader::from_spv_file(
             device,
-            Path::new("./star.frag.spv"),
+            Path::new("./assets/shaders/star.frag.spv"),
         )?;
 
         let (vertex_buffer, index_buffer) = {
