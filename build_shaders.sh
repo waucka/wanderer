@@ -2,14 +2,14 @@
 
 COMMON_ARGS="--target-env vulkan1.2"
 
-glslangValidator -V lighting.vert.glsl $COMMON_ARGS -o lighting.vert.spv || exit 1
-glslangValidator -V lighting.frag.glsl $COMMON_ARGS -o lighting.frag.spv || exit 1
+glslangValidator -V lighting.vert.glsl $COMMON_ARGS -o ./assets/shaders/lighting.vert.spv || exit 1
+glslangValidator -V lighting.frag.glsl $COMMON_ARGS -o ./assets/shaders/lighting.frag.spv || exit 1
 
-glslangValidator -V hdr.vert.glsl $COMMON_ARGS -o hdr.vert.spv || exit 1
-glslangValidator -V hdr.frag.glsl $COMMON_ARGS -o hdr.frag.spv || exit 1
+glslangValidator -V hdr.vert.glsl $COMMON_ARGS -o ./assets/shaders/hdr.vert.spv || exit 1
+glslangValidator -V hdr.frag.glsl $COMMON_ARGS -o ./assets/shaders/hdr.frag.spv || exit 1
 
-glslangValidator -V ui.vert.glsl $COMMON_ARGS -o ui.vert.spv || exit 1
-glslangValidator -V ui.frag.glsl $COMMON_ARGS -o ui.frag.spv || exit 1
+glslangValidator -V ui.vert.glsl $COMMON_ARGS -o ./assets/shaders/ui.vert.spv || exit 1
+glslangValidator -V ui.frag.glsl $COMMON_ARGS -o ./assets/shaders/ui.frag.spv || exit 1
 
-glslangValidator -V star.vert.glsl $COMMON_ARGS -o star.vert.spv || exit 1
-glslangValidator -V star.frag.glsl $COMMON_ARGS -o star.frag.spv || exit 1
+glslangValidator -V star.vert.glsl $COMMON_ARGS -o ./assets/shaders/star.vert.spv || exit 1
+glslangValidator -V star.frag.glsl $COMMON_ARGS -o ./assets/shaders/star.frag.spv || exit 1
