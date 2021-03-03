@@ -292,17 +292,17 @@ impl Texture {
         format!("{:?}", self.image.img)
     }
 
-    pub fn from_file(device: &Device, image_path: &Path, srgb: bool) -> anyhow::Result<Self> {
+    pub fn from_file(device: &Device, image_path: &Path, srgb: bool, mipmapped: bool) -> anyhow::Result<Self> {
         let start = std::time::Instant::now();
         let image_object = match image::open(image_path) {
             Ok(v) => v,
             Err(e) => return Err(anyhow!("{}: {}", image_path.display(), e)),
         };
         println!("Loaded {} in {}ms", image_path.display(), start.elapsed().as_millis());
-        Self::from_image(device, image_object, srgb)
+        Self::from_image(device, image_object, srgb, mipmapped)
     }
 
-    pub fn from_image(device: &Device, image_object: DynamicImage, srgb: bool) -> anyhow::Result<Self> {
+    pub fn from_image(device: &Device, image_object: DynamicImage, srgb: bool, mipmapped: bool) -> anyhow::Result<Self> {
         let (image_width, image_height) = (image_object.width(), image_object.height());
         let image_size =
             (std::mem::size_of::<u8>() as u32 * image_width * image_height * 4) as vk::DeviceSize;
@@ -356,11 +356,19 @@ impl Texture {
             Image::copy_buffer_no_deps(&upload_buffer, &image)?;
         }
 
-        let start = std::time::Instant::now();
-        image.generate_mipmaps(
-            mip_levels,
-        )?;
-        println!("Generated mipmaps in {}ms", start.elapsed().as_millis());
+        if mipmapped {
+            let start = std::time::Instant::now();
+            image.generate_mipmaps(
+                mip_levels,
+            )?;
+            println!("Generated mipmaps in {}ms", start.elapsed().as_millis());
+        } else {
+            image.transition_layout(
+                vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+                vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
+                mip_levels,
+            )?;
+        }
 
         let image_view = Rc::new(ImageView::from_image(
             &image,
@@ -487,12 +495,12 @@ impl Material {
         normal_path: &Path,
         material_path: &Path,
     ) -> anyhow::Result<Self> {
-        let color_texture = Texture::from_file(device, color_path, true)?;
+        let color_texture = Texture::from_file(device, color_path, true, true)?;
         let mip_levels = color_texture.get_mip_levels();
         Ok(Self {
             color: Rc::new(color_texture),
-            normal: Rc::new(Texture::from_file(device, normal_path, false)?),
-            material: Rc::new(Texture::from_file(device, material_path, false)?),
+            normal: Rc::new(Texture::from_file(device, normal_path, false, true)?),
+            material: Rc::new(Texture::from_file(device, material_path, false, true)?),
             sampler: Rc::new(Sampler::new(
                 &device,
                 mip_levels,

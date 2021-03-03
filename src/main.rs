@@ -627,7 +627,7 @@ impl VulkanApp21 {
                 }
             )?,
             //Rc::new(Texture::from_exr(&device, &Path::new("assets/textures/star_colors.exr"))?),
-            Rc::new(Texture::from_file(&device, &Path::new("assets/textures/star_colors.png"), true)?),
+            Rc::new(Texture::from_file(&device, &Path::new("assets/textures/star_colors.png"), true, false)?),
             WINDOW_WIDTH,
             WINDOW_HEIGHT,
             &render_pass,
