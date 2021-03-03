@@ -919,6 +919,19 @@ impl VulkanApp21 {
             &self.render_pass,
         )?;
 
+
+        self.global_uniform.proj = {
+            let mut proj = cgmath::perspective(
+                Deg(45.0),
+                width as f32
+                    / height as f32,
+                0.1,
+                100.0,
+            );
+            proj[1][1] = proj[1][1] * -1.0;
+            proj.into()
+        };
+
         self.attachment_set.resize(&self.render_pass, width, height, self.msaa_samples)?;
         let hdr = &mut self.hdr;
         let global_pool = &mut self.global_pool;
