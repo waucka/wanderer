@@ -288,7 +288,7 @@ impl Image {
         use std::cmp::max;
         super::command_buffer::CommandBuffer::run_oneshot_internal(
             Rc::clone(&self.device),
-            self.device.get_default_transfer_pool(),
+            self.device.get_default_graphics_pool(),
             |writer| {
                 let mut image_barrier = vk::ImageMemoryBarrier{
                     s_type: vk::StructureType::IMAGE_MEMORY_BARRIER,
