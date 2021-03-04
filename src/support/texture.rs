@@ -332,8 +332,12 @@ impl Texture {
 
         let mut image = Image::new(
             device,
-            ImageBuilder::new2d(image_width as usize, image_height as usize)
-                .with_mip_levels(mip_levels)
+            if image_width == 1 || image_height == 1 {
+                ImageBuilder::new1d(image_width as usize)
+            } else {
+                ImageBuilder::new2d(image_width as usize, image_height as usize)
+            }
+            .with_mip_levels(mip_levels)
                 .with_num_samples(vk::SampleCountFlags::TYPE_1)
                 .with_format(if srgb {
                     vk::Format::R8G8B8A8_SRGB
