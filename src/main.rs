@@ -1,12 +1,13 @@
 use winit::event_loop::EventLoop;
 use ash::vk;
 use cgmath::{Deg, Matrix4, Point3, Vector3, Vector4, InnerSpace};
-use glsl_layout::{AsStd140};
+use glsl_layout::Uniform;
 
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::path::Path;
 use std::rc::Rc;
+use std::time::Duration;
 
 mod platforms;
 mod window;
@@ -55,8 +56,8 @@ const WINDOW_HEIGHT: usize = 768;
 //const MODEL_PATH: &'static str = "viking_room.obj";
 //const TEXTURE_PATH: &'static str = "viking_room.png";
 
-#[derive(Debug, Default, Clone, Copy, AsStd140)]
-struct UniformBufferObject {
+#[derive(Debug, Default, Clone, Copy, Uniform)]
+struct GlobalUniform {
     #[allow(unused)]
     view: Matrix4f,
     #[allow(unused)]
@@ -70,12 +71,18 @@ struct UniformBufferObject {
     #[allow(unused)]
     light_colors: [Vector4f; 4],
     #[allow(unused)]
+    // This is the number of nanoseconds since start as a u128 but in vector form.
+    // r is most significant
+    // a is least significant
+    // Do I need to store the full 128 bits?  Probably not.  Am I going to?  Yeah.
+    current_time: glsl_layout::uvec4,
+    #[allow(unused)]
     use_parallax: glsl_layout::boolean,
     #[allow(unused)]
     use_ao: glsl_layout::boolean,
 }
 
-impl UniformBufferObject {
+impl GlobalUniform {
     fn get_twiddler_data(&self) -> Rc<ui_app::UniformData> {
         let mut data = ui_app::UniformData::new();
         data.add(
@@ -104,7 +111,7 @@ impl UniformBufferObject {
     }
 }
 
-#[derive(Debug, Default, Clone, Copy, AsStd140)]
+#[derive(Debug, Default, Clone, Copy, Uniform)]
 struct HdrControlUniform {
     #[allow(unused)]
     exposure: f32,
@@ -287,7 +294,7 @@ impl UIManager {
 
 struct GlobalFrameData {
     descriptor_set: Rc<DescriptorSet>,
-    uniform_buffer: Rc<UniformBuffer<UniformBufferObject>>,
+    uniform_buffer: Rc<UniformBuffer<GlobalUniform>>,
 }
 
 struct HdrFrameData {
@@ -304,7 +311,7 @@ struct VulkanApp21 {
     #[allow(unused)]
     global_descriptor_set_layout: DescriptorSetLayout,
     global_frame_data: PerFrameSet<GlobalFrameData>,
-    global_uniform: UniformBufferObject,
+    global_uniform: GlobalUniform,
     hdr_control_uniform: HdrControlUniform,
     #[allow(unused)]
     scene: Scene,
@@ -488,7 +495,7 @@ impl VulkanApp21 {
         )?;
 
         let light_intensity = 10000.0;
-        let global_uniform = UniformBufferObject{
+        let global_uniform = GlobalUniform{
             view: {
                 let view_matrix = Matrix4::look_at_dir(
                     Point3::new(0.0, -2.0, 0.0),
@@ -522,6 +529,7 @@ impl VulkanApp21 {
                 [0.0, 0.0, 0.0, 0.0].into(),
                 [0.0, 0.0, 0.0, 0.0].into(),
             ],
+            current_time: glsl_layout::uvec4::from([0_u32, 0_u32, 0_u32, 0_u32]),
             use_parallax: true.into(),
             use_ao: true.into(),
         };
@@ -640,7 +648,7 @@ impl VulkanApp21 {
                 [-50.0, 0.0, 5.0].into(),
                 44.13,
                 3900,
-                439.0,
+                1.0,//439.0,
             ),
         )?;
         star_renderer.add(
@@ -658,7 +666,7 @@ impl VulkanApp21 {
                 [7.0, 0.0, 5.0].into(),
                 3.8,
                 16400,
-                800.0,
+                1.0,//800.0,
             ),
         )?;
 
@@ -835,7 +843,8 @@ impl VulkanApp21 {
         })
     }
 
-    fn update_uniform_buffer(&mut self, delta_time: f32) -> anyhow::Result<()> {
+    fn update_uniform_buffer(&mut self, since_last_frame: Duration) -> anyhow::Result<()> {
+        let delta_time = ((since_last_frame.as_nanos() as f64) / 1_000_000_000_f64) as f32;
         let frame = self.presenter.get_current_frame();
         let pitch_transform = Matrix4::from_axis_angle(
             self.view_right.truncate(),
@@ -892,6 +901,28 @@ impl VulkanApp21 {
             );
             view_matrix.into()
         };
+
+        let current_time: &mut [u32; 4] = uniform_transform.current_time.as_mut();
+
+        let selector_1: u128 = 0xffffffff_00000000_00000000_00000000;
+        let selector_2: u128 = 0x00000000_ffffffff_00000000_00000000;
+        let selector_3: u128 = 0x00000000_00000000_ffffffff_00000000;
+        let selector_4: u128 = 0x00000000_00000000_00000000_ffffffff;
+
+        let mut last_frame: u128 = 0;
+        last_frame = last_frame | (current_time[0] as u128) << (32 * 3);
+        last_frame = last_frame | (current_time[1] as u128) << (32 * 2);
+        last_frame = last_frame | (current_time[2] as u128) << (32 * 1);
+        last_frame = last_frame | (current_time[3] as u128) << (32 * 0);
+        //dbg!(last_frame);
+        //dbg!(since_last_frame.as_nanos());
+        last_frame += since_last_frame.as_nanos();
+        current_time[0] = ((last_frame & selector_1) >> (32 * 3)) as u32;
+        current_time[1] = ((last_frame & selector_2) >> (32 * 2)) as u32;
+        current_time[2] = ((last_frame & selector_3) >> (32 * 1)) as u32;
+        current_time[3] = ((last_frame & selector_4) >> (32 * 0)) as u32;
+        //dbg!(current_time);
+        //dbg!(uniform_transform.current_time);
 
         uniform_transform.set_data(Rc::clone(&self.uniform_twiddler_app));
         self.hdr_control_uniform.set_data(Rc::clone(&self.hdr_twiddler_app));
@@ -1057,9 +1088,8 @@ impl VulkanApp for VulkanApp21 {
         // Hopefully, this will give me the precision I need for the calculation but the
         // compactness and speed I want for the result.
         let since_last_frame = self.presenter.wait_for_next_frame()?;
-        let delta_time = ((since_last_frame.as_nanos() as f64) / 1_000_000_000_f64) as f32;
 
-        self.update_uniform_buffer(delta_time)?;
+        self.update_uniform_buffer(since_last_frame)?;
         self.presenter.submit_command_buffer(
             &command_buffer,
             vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT,

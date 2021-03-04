@@ -1,5 +1,5 @@
 use ash::vk;
-use glsl_layout::AsStd140;
+use glsl_layout::Uniform;
 use cgmath::{Matrix4, Vector2, Vector4};
 
 use std::os::raw::c_char;
@@ -76,8 +76,8 @@ impl Default for Matrix4f {
     }
 }
 
-unsafe impl AsStd140 for Matrix4f {
-    type Align = <glsl_layout::mat4x4 as AsStd140>::Align;
+impl Uniform for Matrix4f {
+    type Align = <glsl_layout::mat4x4 as Uniform>::Align;
     type Std140 = glsl_layout::mat4x4;
 
     fn std140(&self) -> Self::Std140
@@ -141,8 +141,8 @@ impl Default for Vector4f {
     }
 }
 
-unsafe impl AsStd140 for Vector4f {
-    type Align = <glsl_layout::vec4 as AsStd140>::Align;
+impl Uniform for Vector4f {
+    type Align = <glsl_layout::vec4 as Uniform>::Align;
     type Std140 = glsl_layout::vec4;
 
     fn std140(&self) -> Self::Std140
@@ -214,8 +214,8 @@ impl Default for Vector2f {
     }
 }
 
-unsafe impl AsStd140 for Vector2f {
-    type Align = <glsl_layout::vec2 as AsStd140>::Align;
+impl Uniform for Vector2f {
+    type Align = <glsl_layout::vec2 as Uniform>::Align;
     type Std140 = glsl_layout::vec2;
 
     fn std140(&self) -> Self::Std140

@@ -1,6 +1,6 @@
 use ash::vk;
 use cgmath::{Vector3, Matrix4};
-use glsl_layout::AsStd140;
+use glsl_layout::Uniform;
 
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -27,7 +27,7 @@ use super::utils::{Vector4f, Matrix4f};
 
 const DEBUG_DESCRIPTOR_SETS: bool = false;
 
-#[derive(Debug, Default, Clone, Copy, AsStd140)]
+#[derive(Debug, Default, Clone, Copy, Uniform)]
 pub struct StarInfo {
     transform: Matrix4f,
     center: Vector4f,

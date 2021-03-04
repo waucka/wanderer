@@ -1,5 +1,7 @@
 #version 450
 
+#extension GL_ARB_gpu_shader_int64 : enable
+
 layout (location = 0) out vec4 frag_color;
 //layout (depth_any) out float gl_FragDepth;
 in vec4 gl_FragCoord;
@@ -11,6 +13,7 @@ layout (set = 0, binding = 0, std140) uniform UniformBufferObject {
     vec4 view_dir;
     vec4 light_positions[4];
     vec4 light_colors[4];
+    uvec4 current_time;
     bool use_parallax;
     bool use_ao;
 } camera;
@@ -157,6 +160,7 @@ float  intersectSphere(vec3 C, float r, vec3 P, vec3 w) {
 // End BSD-licensed noise implementation
 
 void main() {
+  uint64_t current_time = (uint64_t(camera.current_time.b) << 32) | uint64_t(camera.current_time.a);
   vec3 direction = normalize(fs_in.fragPos - camera.view_pos.xyz);
   float intersection_distance = intersectSphere(star_info.center.xyz,
                                                 star_info.radius,
@@ -183,6 +187,7 @@ void main() {
 
   vec3 sphere_pos = hit_pos - star_info.center.xyz;
   float theta = atan(sphere_pos.y, sphere_pos.x);
+  theta += ((float(current_time) / 1000000000) / 100.0 * pi) / star_info.radius;
   float phi = acos(sphere_pos.z / sqrt(square(sphere_pos.x) + square(sphere_pos.y) + square(sphere_pos.z)));
   float noise_scale = 30.0 * log(star_info.radius + 1.0);
   float adjustment = NOISE(vec2(theta * noise_scale, phi * noise_scale));

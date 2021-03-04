@@ -1,7 +1,7 @@
 use ash::version::DeviceV1_0;
 use ash::vk;
 use anyhow::anyhow;
-use glsl_layout::AsStd140;
+use glsl_layout::Uniform;
 
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -91,14 +91,14 @@ pub trait DescriptorRef {
     fn get_type(&self) -> vk::DescriptorType;
 }
 
-pub struct UniformBufferRef<T: AsStd140>
-where <T as AsStd140>::Std140: Sized
+pub struct UniformBufferRef<T: Uniform>
+where <T as Uniform>::Std140: Sized
 {
     uniform_buffers: Vec<Rc<UniformBuffer<T>>>,
 }
 
-impl<T: AsStd140> UniformBufferRef<T>
-where <T as AsStd140>::Std140: Sized
+impl<T: Uniform> UniformBufferRef<T>
+where <T as Uniform>::Std140: Sized
 {
     pub fn new(uniform_buffers: Vec<Rc<UniformBuffer<T>>>) -> Self {
         Self{
@@ -107,8 +107,8 @@ where <T as AsStd140>::Std140: Sized
     }
 }
 
-impl<T: AsStd140> DescriptorRef for UniformBufferRef<T>
-where <T as AsStd140>::Std140: Sized
+impl<T: Uniform> DescriptorRef for UniformBufferRef<T>
+where <T as Uniform>::Std140: Sized
 {
     fn get_write(&self, dst_set: Rc<DescriptorSet>, dst_binding: u32) -> WriteDescriptorSet {
         let mut uniform_buffer_info = vec![];

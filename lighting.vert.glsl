@@ -10,6 +10,7 @@ layout (set = 0, binding = 0, std140) uniform UniformBufferObject {
     vec4 view_dir;
     vec4 light_positions[4];
     vec4 light_colors[4];
+    uvec4 current_time;
     bool use_parallax;
     bool use_ao;
 } camera;

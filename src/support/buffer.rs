@@ -1,7 +1,7 @@
 use ash::version::DeviceV1_0;
 use ash::vk;
 use anyhow::anyhow;
-use glsl_layout::AsStd140;
+use glsl_layout::Uniform;
 
 use std::rc::Rc;
 use std::ptr;
@@ -330,26 +330,28 @@ impl Drop for IndexBuffer {
     }
 }
 
-pub struct UniformBuffer<T: AsStd140>
-where <T as AsStd140>::Std140: Sized
+pub struct UniformBuffer<T: Uniform>
+where <T as Uniform>::Std140: Sized
 {
     buf: Rc<Buffer>,
     size: usize,
     _phantom: std::marker::PhantomData<T>,
 }
 
-impl<T: AsStd140> UniformBuffer<T>
-where <T as AsStd140>::Std140: Sized
+impl<T: Uniform> UniformBuffer<T>
+where <T as Uniform>::Std140: Sized
 {
     pub fn new(
         device: &Device,
         initial_value: Option<&T>,
     ) -> anyhow::Result<Self> {
-        let size = std::mem::size_of::<T>();
+        let size = std::mem::size_of::<T::Std140>();
         let buffer = Rc::new(Buffer::new(
             Rc::clone(&device.inner),
             size as u64,
             vk::BufferUsageFlags::UNIFORM_BUFFER,
+            // TODO: consider allowing DEVICE_LOCAL to be added here.  That can be useful
+            //       for frequently-updated data of small size (overall limit of 256MB on AMD).
             vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
             vk::SharingMode::EXCLUSIVE,
         )?);
@@ -372,9 +374,9 @@ where <T as AsStd140>::Std140: Sized
         new_value: &T,
     ) -> anyhow::Result<()> {
         let std140_val = new_value.std140();
-        let new_value_size = std::mem::size_of_val::<T::Std140>(&std140_val);
-        if self.size > new_value_size {
-            Err(anyhow!("Tried to write {} bytes to a {}-byte uniform buffer!", new_value_size, self.size))
+        let std140_value_size = std::mem::size_of_val::<T::Std140>(&std140_val);
+        if self.size < std140_value_size {
+            Err(anyhow!("Tried to write {} bytes to a {}-byte uniform buffer!", std140_value_size, self.size))
         } else {
             self.buf.with_memory_mapping(|mmap| {
                 mmap.copy_item(&std140_val);
@@ -388,16 +390,16 @@ where <T as AsStd140>::Std140: Sized
     }
 }
 
-impl<T: AsStd140> HasBuffer for UniformBuffer<T>
-where <T as AsStd140>::Std140: Sized
+impl<T: Uniform> HasBuffer for UniformBuffer<T>
+where <T as Uniform>::Std140: Sized
 {
     fn get_buffer(&self) -> vk::Buffer {
         self.buf.buf
     }
 }
 
-impl<T: AsStd140> Drop for UniformBuffer<T>
-where <T as AsStd140>::Std140: Sized
+impl<T: Uniform> Drop for UniformBuffer<T>
+where <T as Uniform>::Std140: Sized
 {
     fn drop(&mut self) {
         // Drop has been implemented solely so that UniformBuffers can be recorded as

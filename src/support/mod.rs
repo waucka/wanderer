@@ -1028,6 +1028,11 @@ fn create_logical_device(
     queue_infos: &Vec<QueueInfo>,
     enabled_extensions: &[String],
 ) -> ash::Device {
+    let device_properties = unsafe{ instance.get_physical_device_properties(physical_device) };
+    let device_name = vk_to_string(&device_properties.device_name);
+    // This is for a temporary workaround.
+    let is_intel = device_name.contains("Intel");
+
     let mut queue_create_infos = vec![];
     // This needs to be outside the loop to avoid use-after-free problems with the pointer
     // stuff going on in DeviceQueueCreateInfo below.
@@ -1055,6 +1060,13 @@ fn create_logical_device(
         ..Default::default()
     };
     physical_device_features.independent_blend = vk::TRUE;
+    // https://gitlab.freedesktop.org/mesa/mesa/-/merge_requests/7329
+    // This is a workaround until the above change hits Ubuntu repos.
+    // The funny thing is that as far as I can tell, shaders that use
+    // uint64_t work just fine without it, but the validation layer complains.
+    if !is_intel {
+        physical_device_features.shader_int64 = vk::TRUE;
+    }
 
     let mut imageless_framebuffer_features = vk::PhysicalDeviceImagelessFramebufferFeatures{
         s_type: vk::StructureType::PHYSICAL_DEVICE_IMAGELESS_FRAMEBUFFER_FEATURES,

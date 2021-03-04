@@ -1,6 +1,6 @@
 use ash::vk;
 use memoffset::offset_of;
-use glsl_layout::AsStd140;
+use glsl_layout::Uniform;
 
 use std::cell::RefCell;
 use std::collections::{HashMap, VecDeque};
@@ -27,7 +27,7 @@ use super::utils::{Vector2f, Vector4f};
 
 const DEBUG_DESCRIPTOR_SETS: bool = false;
 
-#[derive(Debug, Default, Clone, Copy, AsStd140)]
+#[derive(Debug, Default, Clone, Copy, Uniform)]
 pub struct UIData {
     #[allow(unused)]
     window_size: Vector2f,

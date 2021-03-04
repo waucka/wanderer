@@ -1,7 +1,7 @@
 use ash::vk;
 use anyhow::anyhow;
 use cgmath::Matrix4;
-use glsl_layout::AsStd140;
+use glsl_layout::Uniform;
 
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -31,7 +31,7 @@ const DEBUG_DESCRIPTOR_SETS: bool = false;
 // TODO: get rid of static geometry type UBO after validating that
 //       this approach works.
 
-#[derive(Debug, Default, Clone, Copy, AsStd140)]
+#[derive(Debug, Default, Clone, Copy, Uniform)]
 pub struct StaticGeometryTypeUBO {
     tint: Vector4f,
 }
@@ -451,7 +451,7 @@ impl<V: Vertex + 'static> Renderable for StaticGeometryRenderer<V> {
     }
 }
 
-#[derive(Debug, Default, Clone, Copy, AsStd140)]
+#[derive(Debug, Default, Clone, Copy, Uniform)]
 pub struct StaticGeometryInstanceUBO {
     #[allow(unused)]
     model: Matrix4f,

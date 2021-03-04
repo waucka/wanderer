@@ -44,3 +44,5 @@ https://hero.handmade.network/episode/code
 # CC music
 http://dig.ccmixter.org/games
 https://www.saschawillems.de/blog/2016/05/28/tutorial-on-using-vulkans-vk_ext_debug_marker-with-renderdoc/
+# Memory usage tips and other stuff
+https://zeux.io/2020/02/27/writing-an-efficient-vulkan-renderer/
