@@ -416,6 +416,7 @@ impl Sampler {
         mag_filter: vk::Filter,
         mipmap_mode: vk::SamplerMipmapMode,
         address_mode: vk::SamplerAddressMode,
+        max_anisotropy: u32,
     ) -> anyhow::Result<Self> {
         let sampler_create_info = vk::SamplerCreateInfo{
             s_type: vk::StructureType::SAMPLER_CREATE_INFO,
@@ -428,9 +429,12 @@ impl Sampler {
             address_mode_v: address_mode,
             address_mode_w: address_mode,
             mip_lod_bias: 0.0,
-            anisotropy_enable: vk::TRUE,
-            // TODO: make this configurable
-            max_anisotropy: 16.0,
+            anisotropy_enable: if max_anisotropy > 0 {
+                vk::TRUE
+            } else {
+                vk::FALSE
+            },
+            max_anisotropy: max_anisotropy as f32,
             compare_enable: vk::FALSE,
             compare_op: vk::CompareOp::ALWAYS,
             min_lod: 0.0,
@@ -512,6 +516,7 @@ impl Material {
                 vk::Filter::LINEAR,
                 vk::SamplerMipmapMode::LINEAR,
                 vk::SamplerAddressMode::REPEAT,
+                16,
             )?),
         })
     }

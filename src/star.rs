@@ -159,6 +159,7 @@ impl StarRenderer {
             vk::Filter::LINEAR,
             vk::SamplerMipmapMode::NEAREST,
             vk::SamplerAddressMode::CLAMP_TO_EDGE,
+            0,
         )?;
 
         let texture_ref = Rc::new(CombinedRef::new(
