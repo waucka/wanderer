@@ -71,11 +71,11 @@ struct GlobalUniform {
     #[allow(unused)]
     light_colors: [Vector4f; 4],
     #[allow(unused)]
-    // This is the number of nanoseconds since start as a u128 but in vector form.
-    // r is most significant
-    // a is least significant
-    // Do I need to store the full 128 bits?  Probably not.  Am I going to?  Yeah.
-    current_time: glsl_layout::uvec4,
+    // This is the number of seconds since start.
+    // While this is good enough for now (unacceptable precision loss
+    // happens around the 72-hour mark), I will need a better solution
+    // for simulation, and that will have to integrate well with this.
+    current_time: f32,
     #[allow(unused)]
     use_parallax: glsl_layout::boolean,
     #[allow(unused)]
@@ -529,7 +529,7 @@ impl VulkanApp21 {
                 [0.0, 0.0, 0.0, 0.0].into(),
                 [0.0, 0.0, 0.0, 0.0].into(),
             ],
-            current_time: glsl_layout::uvec4::from([0_u32, 0_u32, 0_u32, 0_u32]),
+            current_time: 0.0,
             use_parallax: true.into(),
             use_ao: true.into(),
         };
@@ -902,27 +902,7 @@ impl VulkanApp21 {
             view_matrix.into()
         };
 
-        let current_time: &mut [u32; 4] = uniform_transform.current_time.as_mut();
-
-        let selector_1: u128 = 0xffffffff_00000000_00000000_00000000;
-        let selector_2: u128 = 0x00000000_ffffffff_00000000_00000000;
-        let selector_3: u128 = 0x00000000_00000000_ffffffff_00000000;
-        let selector_4: u128 = 0x00000000_00000000_00000000_ffffffff;
-
-        let mut last_frame: u128 = 0;
-        last_frame = last_frame | (current_time[0] as u128) << (32 * 3);
-        last_frame = last_frame | (current_time[1] as u128) << (32 * 2);
-        last_frame = last_frame | (current_time[2] as u128) << (32 * 1);
-        last_frame = last_frame | (current_time[3] as u128) << (32 * 0);
-        //dbg!(last_frame);
-        //dbg!(since_last_frame.as_nanos());
-        last_frame += since_last_frame.as_nanos();
-        current_time[0] = ((last_frame & selector_1) >> (32 * 3)) as u32;
-        current_time[1] = ((last_frame & selector_2) >> (32 * 2)) as u32;
-        current_time[2] = ((last_frame & selector_3) >> (32 * 1)) as u32;
-        current_time[3] = ((last_frame & selector_4) >> (32 * 0)) as u32;
-        //dbg!(current_time);
-        //dbg!(uniform_transform.current_time);
+        uniform_transform.current_time += delta_time;
 
         uniform_transform.set_data(Rc::clone(&self.uniform_twiddler_app));
         self.hdr_control_uniform.set_data(Rc::clone(&self.hdr_twiddler_app));
