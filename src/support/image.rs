@@ -5,8 +5,8 @@ use std::rc::Rc;
 use std::ptr;
 use std::os::raw::c_void;
 
-use super::{Device, InnerDevice};
-use super::utils::{Defaulted, find_memory_type};
+use super::{Device, InnerDevice, MemoryUsage};
+use super::utils::Defaulted;
 use super::command_buffer::CommandBuffer;
 use super::buffer::UploadSourceBuffer;
 
@@ -65,7 +65,8 @@ impl ImageBuilder {
 pub struct Image {
     device: Rc<InnerDevice>,
     pub (in super) img: vk::Image,
-    mem: Option<vk::DeviceMemory>,
+    allocation: Option<vk_mem::Allocation>,
+    _allocation_info: Option<vk_mem::AllocationInfo>,
     pub (in super) extent: vk::Extent3D,
     pub (in super) format: vk::Format,
     image_type: vk::ImageType,
@@ -87,7 +88,8 @@ impl Image {
         Self {
             device,
             img: image,
-            mem: None,
+            allocation: None,
+            _allocation_info: None,
             extent,
             format,
             image_type,
@@ -146,39 +148,14 @@ impl Image {
             initial_layout: vk::ImageLayout::UNDEFINED,
         };
 
-        let texture_image = unsafe {
-            device.device
-                .create_image(&image_create_info, None)?
-        };
-
-        let image_memory_requirement = unsafe {
-            device.device.get_image_memory_requirements(texture_image)
-        };
-        let memory_allocate_info = vk::MemoryAllocateInfo{
-            s_type: vk::StructureType::MEMORY_ALLOCATE_INFO,
-            p_next: ptr::null(),
-            allocation_size: image_memory_requirement.size,
-            memory_type_index: find_memory_type(
-                image_memory_requirement.memory_type_bits,
-                *builder.required_memory_properties.get_value(),
-                &device.memory_properties,
-            ),
-        };
-
-        let texture_image_memory = unsafe {
-            device.device
-                .allocate_memory(&memory_allocate_info, None)?
-        };
-
-        unsafe {
-            device.device
-                .bind_image_memory(texture_image, texture_image_memory, 0)?
-        }
+        let (texture_image, allocation, allocation_info) =
+             device.create_image(MemoryUsage::GpuOnly, &image_create_info)?;
 
         Ok(Image{
             device: device,
             img: texture_image,
-            mem: Some(texture_image_memory),
+            allocation: Some(allocation),
+            _allocation_info: Some(allocation_info),
             extent,
             format,
             image_type,
@@ -446,13 +423,13 @@ impl Image {
 
 impl Drop for Image {
     fn drop(&mut self) {
-        unsafe {
-            //println!("Dropping image {:?}", self.img);
-            if let Some(mem) = self.mem {
-                // If we don't have the memory for it, then we aren't
-                // responsible for destroying it.
-                self.device.device.destroy_image(self.img, None);
-                self.device.device.free_memory(mem, None);
+        //println!("Dropping image {:?}", self.img);
+        // If we don't have an allocation for it, then we aren't
+        // responsible for destroying it.
+        if let Some(allocation) = self.allocation {
+            match self.device.destroy_image(self.img, &allocation) {
+                Ok(_) => (),
+                Err(e) => println!("Failed to destroy image: {}", e),
             }
         }
     }

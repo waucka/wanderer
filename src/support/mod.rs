@@ -760,6 +760,24 @@ impl Device {
     }
 }
 
+pub enum MemoryUsage {
+    GpuOnly,
+    CpuOnly,
+    CpuToGpu,
+    GpuToCpu,
+}
+
+impl MemoryUsage {
+    fn as_vk_mem(self) -> vk_mem::MemoryUsage {
+        match self {
+            MemoryUsage::GpuOnly => vk_mem::MemoryUsage::GpuOnly,
+            MemoryUsage::CpuOnly => vk_mem::MemoryUsage::CpuOnly,
+            MemoryUsage::CpuToGpu => vk_mem::MemoryUsage::CpuToGpu,
+            MemoryUsage::GpuToCpu => vk_mem::MemoryUsage::GpuToCpu,
+        }
+    }
+}
+
 struct QueueSet {
     queues: Vec<Rc<Queue>>,
     pools: Vec<Rc<CommandPool>>,
@@ -779,6 +797,7 @@ struct InnerDevice {
     debug_utils_loader: ash::extensions::ext::DebugUtils,
     debug_messenger: vk::DebugUtilsMessengerEXT,
     validation_enabled: bool,
+    allocator: vk_mem::Allocator,
 
     physical_device: vk::PhysicalDevice,
     memory_properties: vk::PhysicalDeviceMemoryProperties,
@@ -843,6 +862,16 @@ impl InnerDevice {
         );
         let swapchain_loader = ash::extensions::khr::Swapchain::new(&instance, &device);
 
+        let allocator = vk_mem::Allocator::new(&vk_mem::AllocatorCreateInfo{
+            physical_device,
+            device: device.clone(),
+            instance: instance.clone(),
+            flags: vk_mem::AllocatorCreateFlags::NONE,
+            preferred_large_heap_block_size: 0,
+            frame_in_use_count: MAX_FRAMES_IN_FLIGHT as u32,
+            heap_size_limits: None,
+        })?;
+
         let this = Rc::new(Self{
             window,
             _entry: entry,
@@ -853,6 +882,7 @@ impl InnerDevice {
             debug_utils_loader,
             debug_messenger,
             validation_enabled: *builder.validation_enabled.get_value(),
+            allocator,
 
             physical_device,
             memory_properties,
@@ -912,6 +942,66 @@ impl InnerDevice {
         }
 
         Ok(this)
+    }
+
+    fn create_buffer(
+        &self,
+        usage: MemoryUsage,
+        buffer_info: &vk::BufferCreateInfo,
+    ) -> anyhow::Result<(vk::Buffer, vk_mem::Allocation, vk_mem::AllocationInfo)> {
+        use vk_mem::*;
+        Ok(self.allocator.create_buffer(
+            buffer_info,
+            &AllocationCreateInfo{
+                usage: usage.as_vk_mem(),
+                ..Default::default()
+            },
+        )?)
+    }
+
+    fn destroy_buffer(
+        &self,
+        buffer: vk::Buffer,
+        allocation: &vk_mem::Allocation,
+    ) -> anyhow::Result<()> {
+        Ok(self.allocator.destroy_buffer(buffer, allocation)?)
+    }
+
+    fn map_memory(
+        &self,
+        allocation: &vk_mem::Allocation,
+    ) -> anyhow::Result<*mut u8> {
+        Ok(self.allocator.map_memory(allocation)?)
+    }
+
+    fn unmap_memory(
+        &self,
+        allocation: &vk_mem::Allocation,
+    ) -> anyhow::Result<()> {
+        Ok(self.allocator.unmap_memory(allocation)?)
+    }
+
+    fn create_image(
+        &self,
+        usage: MemoryUsage,
+        image_info: &vk::ImageCreateInfo,
+    ) -> anyhow::Result<(vk::Image, vk_mem::Allocation, vk_mem::AllocationInfo)> {
+        use vk_mem::*;
+        Ok(self.allocator.create_image(
+            image_info,
+            &AllocationCreateInfo{
+                usage: usage.as_vk_mem(),
+                ..Default::default()
+            },
+        )?)
+    }
+
+    fn destroy_image(
+        &self,
+        image: vk::Image,
+        allocation: &vk_mem::Allocation,
+    ) -> anyhow::Result<()> {
+        Ok(self.allocator.destroy_image(image, allocation)?)
     }
 
     fn get_default_graphics_queue(&self) -> Rc<Queue> {
@@ -1010,6 +1100,7 @@ impl Drop for InnerDevice {
             } else {
                 panic!("We are destroying a Device, but its queue set is borrowed!");
             }
+            self.allocator.destroy();
             self.device.destroy_device(None);
             self.surface_loader.destroy_surface(self.surface, None);
 

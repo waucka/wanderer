@@ -1,4 +1,3 @@
-use ash::version::DeviceV1_0;
 use ash::vk;
 use anyhow::anyhow;
 use glsl_layout::Uniform;
@@ -6,7 +5,7 @@ use glsl_layout::Uniform;
 use std::rc::Rc;
 use std::ptr;
 
-use super::{Device, InnerDevice};
+use super::{Device, InnerDevice, MemoryUsage};
 use super::command_buffer::{CommandBuffer, CommandPool};
 
 pub trait HasBuffer {
@@ -15,27 +14,18 @@ pub trait HasBuffer {
 
 pub struct MemoryMapping<T> {
     device: Rc<InnerDevice>,
-    mem: vk::DeviceMemory,
+    allocation: vk_mem::Allocation,
     data_ptr: *mut T,
 }
 
 impl<T> MemoryMapping<T> {
     fn new(buf: &Buffer) -> anyhow::Result<Self> {
-        let req = unsafe {
-            buf.device.device.get_buffer_memory_requirements(buf.buf)
-        };
         Ok(Self {
             device: buf.device.clone(),
-            data_ptr: unsafe {
-                buf.device.device
-                    .map_memory(
-                        buf.mem,
-                        0,
-                        req.size,
-                        vk::MemoryMapFlags::empty(),
-                    )? as *mut T
-            },
-            mem: buf.mem,
+            data_ptr: buf.device.map_memory(
+                &buf.allocation,
+            )? as *mut T,
+            allocation: buf.allocation,
         })
     }
 
@@ -54,8 +44,9 @@ impl<T> MemoryMapping<T> {
 
 impl<T> Drop for MemoryMapping<T> {
     fn drop(&mut self) {
-        unsafe {
-            self.device.device.unmap_memory(self.mem);
+        match self.device.unmap_memory(&self.allocation) {
+            Ok(_) => (),
+            Err(e) => println!("Failed to unmap memory: {}", e),
         }
     }
 }
@@ -63,7 +54,8 @@ impl<T> Drop for MemoryMapping<T> {
 pub struct Buffer {
     device: Rc<InnerDevice>,
     pub (in super) buf: vk::Buffer,
-    mem: vk::DeviceMemory,
+    allocation: vk_mem::Allocation,
+    _allocation_info: vk_mem::AllocationInfo,
     size: vk::DeviceSize,
 }
 
@@ -72,7 +64,7 @@ impl Buffer {
         device: Rc<InnerDevice>,
         size: vk::DeviceSize,
         usage: vk::BufferUsageFlags,
-        required_memory_flags: vk::MemoryPropertyFlags,
+        memory_usage: MemoryUsage,
         sharing_mode: vk::SharingMode,
     ) -> anyhow::Result<Self> {
         if size == 0 {
@@ -89,39 +81,16 @@ impl Buffer {
             p_queue_family_indices: ptr::null(),
         };
 
-        let buffer = unsafe {
-            device.device
-                .create_buffer(&buffer_create_info, None)?
-        };
-
-        let mem_requirements = unsafe { device.device.get_buffer_memory_requirements(buffer) };
-        let memory_type = super::utils::find_memory_type(
-            mem_requirements.memory_type_bits,
-            required_memory_flags,
-            &device.memory_properties,
-        );
-
-        let allocate_info = vk::MemoryAllocateInfo{
-            s_type: vk::StructureType::MEMORY_ALLOCATE_INFO,
-            p_next: ptr::null(),
-            allocation_size: mem_requirements.size,
-            memory_type_index: memory_type,
-        };
-
-        let buffer_memory = unsafe {
-            device.device
-                .allocate_memory(&allocate_info, None)?
-        };
-
-        unsafe {
-            device.device
-                .bind_buffer_memory(buffer, buffer_memory, 0)?
-        }
+        let (buffer, allocation, allocation_info) = device.create_buffer(
+            memory_usage,
+            &buffer_create_info,
+        )?;
 
         Ok(Buffer{
             device: device.clone(),
             buf: buffer,
-            mem: buffer_memory,
+            allocation,
+            _allocation_info: allocation_info,
             size,
         })
     }
@@ -175,9 +144,9 @@ impl HasBuffer for Buffer {
 
 impl Drop for Buffer {
     fn drop(&mut self) {
-        unsafe {
-            self.device.device.destroy_buffer(self.buf, None);
-            self.device.device.free_memory(self.mem, None);
+        match self.device.destroy_buffer(self.buf, &self.allocation) {
+            Ok(_) => (),
+            Err(e) => println!("Failed to destroy buffer: {}", e),
         }
     }
 }
@@ -196,7 +165,7 @@ impl UploadSourceBuffer {
                 Rc::clone(&device.inner),
                 size,
                 vk::BufferUsageFlags::TRANSFER_SRC,
-                vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
+                MemoryUsage::CpuOnly,
                 vk::SharingMode::EXCLUSIVE,
             )?),
         })
@@ -241,7 +210,7 @@ impl<T> VertexBuffer<T> {
             Rc::clone(&device.inner),
             buffer_size,
             vk::BufferUsageFlags::TRANSFER_DST | vk::BufferUsageFlags::VERTEX_BUFFER,
-            vk::MemoryPropertyFlags::DEVICE_LOCAL,
+            MemoryUsage::GpuOnly,
             // TODO: is this really what we want?
             vk::SharingMode::EXCLUSIVE,
         )?);
@@ -295,7 +264,7 @@ impl IndexBuffer {
             Rc::clone(&device.inner),
             buffer_size,
             vk::BufferUsageFlags::TRANSFER_DST | vk::BufferUsageFlags::INDEX_BUFFER,
-            vk::MemoryPropertyFlags::DEVICE_LOCAL,
+            MemoryUsage::GpuOnly,
             // TODO: Is this actually what we want in multiqueue scenarios?
             vk::SharingMode::EXCLUSIVE,
         )?);
@@ -350,9 +319,8 @@ where <T as Uniform>::Std140: Sized
             Rc::clone(&device.inner),
             size as u64,
             vk::BufferUsageFlags::UNIFORM_BUFFER,
-            // TODO: consider allowing DEVICE_LOCAL to be added here.  That can be useful
-            //       for frequently-updated data of small size (overall limit of 256MB on AMD).
-            vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
+            // TODO: allow GpuOnly for infrequently-updated buffers
+            MemoryUsage::CpuToGpu,
             vk::SharingMode::EXCLUSIVE,
         )?);
 
