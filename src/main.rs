@@ -308,6 +308,7 @@ struct VulkanApp21 {
     render_pass: RenderPass,
     #[allow(unused)]
     global_pool: DescriptorPool,
+    hdr_pool: DescriptorPool,
     #[allow(unused)]
     global_descriptor_set_layout: DescriptorSetLayout,
     global_frame_data: PerFrameSet<GlobalFrameData>,
@@ -464,19 +465,31 @@ impl VulkanApp21 {
             let mut pool_sizes: HashMap<vk::DescriptorType, u32> = HashMap::new();
             pool_sizes.insert(
                 vk::DescriptorType::UNIFORM_BUFFER,
-                // This is going to be shared between rendering and HDR tonemapping.
-                20,
+                10,
+            );
+            DescriptorPool::new(
+                "Global",
+                &device,
+                pool_sizes,
+                10,
+            )?
+        };
+
+        let mut hdr_pool = {
+            let mut pool_sizes: HashMap<vk::DescriptorType, u32> = HashMap::new();
+            pool_sizes.insert(
+                vk::DescriptorType::UNIFORM_BUFFER,
+                10,
             );
             pool_sizes.insert(
                 vk::DescriptorType::INPUT_ATTACHMENT,
-                // This is going to be shared between rendering and HDR tonemapping.
-                20,
+                10,
             );
             DescriptorPool::new(
+                "HDR",
                 &device,
                 pool_sizes,
-                // This is going to be shared between rendering and HDR tonemapping.
-                20,
+                10,
             )?
         };
 
@@ -733,7 +746,7 @@ impl VulkanApp21 {
                     )),
                     Rc::new(UniformBufferRef::new(vec![Rc::clone(&uniform_buffer)])),
                 ];
-                let sets = global_pool.create_descriptor_sets(
+                let sets = hdr_pool.create_descriptor_sets(
                     1,
                     &hdr_descriptor_set_layout,
                     &items,
@@ -776,6 +789,7 @@ impl VulkanApp21 {
                 presenter,
                 render_pass,
                 global_pool,
+                hdr_pool,
                 global_descriptor_set_layout,
                 global_frame_data,
                 global_uniform,
@@ -945,7 +959,7 @@ impl VulkanApp21 {
 
         self.attachment_set.resize(&self.render_pass, width, height, self.msaa_samples)?;
         let hdr = &mut self.hdr;
-        let global_pool = &mut self.global_pool;
+        let hdr_pool = &mut self.hdr_pool;
         let hdr_descriptor_set_layout = &self.hdr_descriptor_set_layout;
         let render_target_color = &self.attachment_set.get(&self.render_target_color);
         let hdr_frame_data = &self.hdr_frame_data;
@@ -960,7 +974,7 @@ impl VulkanApp21 {
                         Rc::clone(&hdr_frame_data.get(frame).uniform_buffer),
                     ])),
                 ];
-                let sets = global_pool.create_descriptor_sets(
+                let sets = hdr_pool.create_descriptor_sets(
                     1,
                     hdr_descriptor_set_layout,
                     &items,

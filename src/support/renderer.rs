@@ -19,7 +19,7 @@ use super::command_buffer::CommandBuffer;
 
 pub struct Presenter {
     device: Rc<InnerDevice>,
-    swapchain: Swapchain,
+    swapchain: Option<Swapchain>,
 
     image_available_semaphores: Vec<vk::Semaphore>,
     render_finished_semaphores: Vec<vk::Semaphore>,
@@ -82,7 +82,7 @@ impl Presenter {
 
         Ok(Self{
             device: device.inner.clone(),
-            swapchain,
+            swapchain: Some(swapchain),
 
             image_available_semaphores,
             render_finished_semaphores,
@@ -97,19 +97,19 @@ impl Presenter {
     }
 
     pub fn get_dimensions(&self) -> (usize, usize) {
-        self.swapchain.get_dimensions()
+        self.swapchain.as_ref().unwrap().get_dimensions()
     }
 
     pub fn get_render_extent(&self) -> vk::Extent2D {
-        self.swapchain.swapchain_extent
+        self.swapchain.as_ref().unwrap().swapchain_extent
     }
 
     pub (in super) fn get_framebuffer(&self) -> vk::Framebuffer {
-        self.swapchain.framebuffer.framebuffer
+        self.swapchain.as_ref().unwrap().framebuffer.framebuffer
     }
 
     pub (in super) fn get_swapchain_image_view(&self, idx: usize) -> vk::ImageView {
-        self.swapchain.frames[idx].imageview.view
+        self.swapchain.as_ref().unwrap().frames[idx].imageview.view
     }
 
     #[allow(unused)]
@@ -151,7 +151,7 @@ impl Presenter {
         let (image_index, _is_sub_optimal) = {
             let result = self.device
                 .acquire_next_image(
-                    self.swapchain.swapchain,
+                    self.swapchain.as_ref().unwrap().swapchain,
                     std::u64::MAX,
                     self.image_available_semaphores[self.current_swapchain_sync],
                     vk::Fence::null(),
@@ -198,12 +198,11 @@ impl Presenter {
                 .device_wait_idle()?;
         }
 
-        //self.swapchain.replace(Swapchain::new(
-        // TODO: I hope this doesn't cause any problems with order of creation/destruction.
-        self.swapchain = Swapchain::new(
+        self.swapchain = None;
+        self.swapchain = Some(Swapchain::new(
             self.device.clone(),
             render_pass,
-        )?;
+        )?);
 
         Ok(())
     }
@@ -226,7 +225,7 @@ impl Presenter {
     {
         //println!("Presenting a frame...");
         //let start = std::time::Instant::now();
-        let swapchains = [self.swapchain.swapchain];
+        let swapchains = [self.swapchain.as_ref().unwrap().swapchain];
         let wait_semaphores = [self.render_finished_semaphores[self.current_swapchain_sync]];
         let present_info = vk::PresentInfoKHR{
             s_type: vk::StructureType::PRESENT_INFO_KHR,
@@ -255,7 +254,7 @@ impl Presenter {
             viewport_update(width, height)?;
         }
 
-        self.current_swapchain_sync = (self.current_swapchain_sync + 1) % self.swapchain.get_num_images();
+        self.current_swapchain_sync = (self.current_swapchain_sync + 1) % self.swapchain.as_ref().unwrap().get_num_images();
         self.last_frame_duration = self.last_frame.elapsed();
         self.last_frame = Instant::now();
         //println!("Presented frame in {}ns", start.elapsed().as_nanos());

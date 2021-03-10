@@ -255,7 +255,7 @@ impl DescriptorRef for InputAttachmentRef {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct DescriptorBindings {
     bindings: Vec<(vk::DescriptorSetLayoutBinding, vk::DescriptorBindingFlags)>,
     next_binding_id: u32,
@@ -322,6 +322,7 @@ impl DescriptorBindings {
     }
 }
 
+#[derive(Debug)]
 pub struct DescriptorSetLayout {
     device: Rc<InnerDevice>,
     pub (in super) layout: vk::DescriptorSetLayout,
@@ -379,7 +380,9 @@ impl Drop for DescriptorSetLayout {
     }
 }
 
+#[derive(Debug)]
 pub struct DescriptorPool {
+    name: String,
     device: Rc<InnerDevice>,
     pools: Vec<vk::DescriptorPool>,
     pool_sizes: HashMap<vk::DescriptorType, u32>,
@@ -389,11 +392,13 @@ pub struct DescriptorPool {
 
 impl DescriptorPool {
     pub fn new(
+        name: &str,
         device: &Device,
         pool_sizes: HashMap<vk::DescriptorType, u32>,
         max_sets: u32,
     ) -> anyhow::Result<Self> {
         let mut this = Self{
+            name: name.to_owned(),
             device: device.inner.clone(),
             pools: Vec::new(),
             pool_sizes,
@@ -405,6 +410,7 @@ impl DescriptorPool {
     }
 
     pub fn reset(&mut self) -> anyhow::Result<()> {
+        //println!("Resetting descriptor pool {}", self.name);
         let mut i = 0;
         for set in &self.sets {
             if Rc::strong_count(set) > 1 {
@@ -465,8 +471,19 @@ impl DescriptorPool {
                 layout.bindings.len(),
             ));
         }
+        dbg!(&self.name);
+        dbg!(self.sets.len());
 
-        let sets = self.allocate(count, layout)?;
+        let sets = match self.allocate(count, layout) {
+            Ok(sets) => sets,
+            Err(e) => {
+                dbg!(e);
+                dbg!(count);
+                dbg!(layout);
+                dbg!(self);
+                panic!("Failed to allocate descriptor sets");
+            },
+        };
         for set in sets.iter() {
             let mut writes = vec![];
             // These have to stick around until the call to update_descriptor_sets() returns.
@@ -501,29 +518,29 @@ impl DescriptorPool {
         count: usize,
         layout: &DescriptorSetLayout,
     ) -> anyhow::Result<Vec<Rc<DescriptorSet>>> {
+        self.allocate_internal(count, layout, true)
+    }
+
+    fn allocate_internal(
+        &mut self,
+        count: usize,
+        layout: &DescriptorSetLayout,
+        retry: bool,
+    ) -> anyhow::Result<Vec<Rc<DescriptorSet>>> {
         let mut layouts: Vec<vk::DescriptorSetLayout> = vec![];
         for _ in 0..count {
             layouts.push(layout.layout);
         }
 
-        let descriptor_set_allocate_info = vk::DescriptorSetAllocateInfo{
+        let info = vk::DescriptorSetAllocateInfo{
             s_type: vk::StructureType::DESCRIPTOR_SET_ALLOCATE_INFO,
             p_next: ptr::null(),
             descriptor_pool: *self.pools.last().unwrap(),
             descriptor_set_count: layouts.len() as u32,
             p_set_layouts: layouts.as_ptr(),
         };
-        self.allocate_internal(&layouts, &descriptor_set_allocate_info, true)
-    }
 
-    fn allocate_internal(
-        &mut self,
-        layouts: &[vk::DescriptorSetLayout],
-        info: &vk::DescriptorSetAllocateInfo,
-        retry: bool,
-    ) -> anyhow::Result<Vec<Rc<DescriptorSet>>> {
-
-        match unsafe { self.device.device.allocate_descriptor_sets(info) } {
+        match unsafe { self.device.device.allocate_descriptor_sets(&info) } {
             Ok(vk_sets) => Ok({
                 let mut sets = Vec::new();
                 for set in vk_sets {
@@ -538,9 +555,9 @@ impl DescriptorPool {
             Err(vk::Result::ERROR_FRAGMENTED_POOL) | Err(vk::Result::ERROR_OUT_OF_POOL_MEMORY) => {
                 if retry {
                     self.grow()?;
-                    self.allocate_internal(layouts, info, false)
+                    self.allocate_internal(count, layout, false)
                 } else {
-                    Err(anyhow!("Cannot allocate descriptor set with given pool parameters"))
+                    Err(anyhow!("Failed second attempt at allocating descriptor set"))
                 }
             },
             Err(e) => Err(anyhow!("Cannot allocate descriptor set: {:?}", e)),

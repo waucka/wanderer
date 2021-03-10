@@ -178,6 +178,7 @@ impl StarRenderer {
                 Self::POOL_SIZE / 2,
             );
             DescriptorPool::new(
+                "Stars",
                 device,
                 pool_sizes,
                 Self::POOL_SIZE,

@@ -364,6 +364,7 @@ impl UIAppRenderer {
             );
             PerFrameSet::new(|_| {
                 DescriptorPool::new(
+                    "UI",
                     device,
                     pool_sizes.clone(),
                     Self::POOL_SIZE,

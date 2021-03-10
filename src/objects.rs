@@ -146,6 +146,7 @@ impl<V: Vertex + 'static> StaticGeometryRenderer<V> {
                 Self::MAX_TEXTURES * Self::NUM_IMAGES_PER_TEXTURE,
             );
             DescriptorPool::new(
+                "Static Geometry Type",
                 device,
                 pool_sizes,
                 Self::POOL_SIZE,
@@ -217,6 +218,7 @@ impl<V: Vertex + 'static> StaticGeometryRenderer<V> {
                 Self::POOL_SIZE * Self::NUM_UNIFORM_BUFFERS_PER_INSTANCE,
             );
             DescriptorPool::new(
+                "Static Geometry Instance",
                 device,
                 pool_sizes,
                 Self::POOL_SIZE,
