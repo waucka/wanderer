@@ -6,9 +6,9 @@ use std::rc::Rc;
 use std::ptr;
 use std::os::raw::c_void;
 
-use super::{Device, InnerDevice, Queue};
+use super::{Device, InnerDevice, Queue, FrameId};
 use super::descriptor::DescriptorSet;
-use super::renderer::{Presenter, RenderPass, Pipeline, AttachmentSet};
+use super::renderer::{Presenter, RenderPass, Pipeline, AttachmentSet, SubpassRef};
 use super::buffer::{VertexBuffer, IndexBuffer, UploadSourceBuffer, HasBuffer, Buffer};
 use super::image::Image;
 use super::shader::Vertex;
@@ -42,7 +42,7 @@ impl SecondaryCommandBuffer {
         &self,
         usage_flags: vk::CommandBufferUsageFlags,
         render_pass: &RenderPass,
-        subpass: u32,
+        subpass: SubpassRef,
         write_fn: T,
     ) -> anyhow::Result<R>
     where
@@ -53,7 +53,7 @@ impl SecondaryCommandBuffer {
             s_type: vk::StructureType::COMMAND_BUFFER_INHERITANCE_INFO,
             p_next: ptr::null(),
             render_pass: render_pass.render_pass,
-            subpass,
+            subpass: subpass.into(),
             // TODO: see if I can avoid doing this (might have negative effects on performance)
             framebuffer: vk::Framebuffer::null(),//presenter.get_framebuffer(),
             occlusion_query_enable: vk::FALSE,
@@ -413,6 +413,7 @@ impl BufferWriter {
         &mut self,
         presenter: &Presenter,
         render_pass: &RenderPass,
+        frame: FrameId,
         clear_values: &[vk::ClearValue],
         attachment_set: &AttachmentSet,
         swapchain_image_index: usize,
@@ -437,7 +438,7 @@ impl BufferWriter {
         let vk_attachments = {
             let mut vk_attachments = vec![];
             vk_attachments.push(presenter.get_swapchain_image_view(swapchain_image_index));
-            vk_attachments.extend(attachment_set.get_image_views());
+            vk_attachments.extend(attachment_set.get_image_views(frame));
             vk_attachments
         };
 

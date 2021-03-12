@@ -6,7 +6,7 @@ layout (location = 0) in vec2 tex_coords;
 
 layout (location = 0) out vec4 frag_color;
 
-layout (set = 0, binding = 1, std140) uniform UniformBufferObject {
+layout (set = 1, binding = 0, std140) uniform UniformBufferObject {
     float exposure;
     float white_luminance;
     uint algo;

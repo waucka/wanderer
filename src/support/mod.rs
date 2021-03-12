@@ -761,9 +761,13 @@ impl Device {
 }
 
 pub enum MemoryUsage {
+    #[allow(dead_code)]
     GpuOnly,
+    #[allow(dead_code)]
     CpuOnly,
+    #[allow(dead_code)]
     CpuToGpu,
+    #[allow(dead_code)]
     GpuToCpu,
 }
 
@@ -800,7 +804,7 @@ struct InnerDevice {
     allocator: vk_mem::Allocator,
 
     physical_device: vk::PhysicalDevice,
-    memory_properties: vk::PhysicalDeviceMemoryProperties,
+    _memory_properties: vk::PhysicalDeviceMemoryProperties,
     device: ash::Device,
     queue_set: RefCell<QueueSet>,
 }
@@ -885,7 +889,7 @@ impl InnerDevice {
             allocator,
 
             physical_device,
-            memory_properties,
+            _memory_properties: memory_properties,
             device: device.clone(),
             queue_set: RefCell::new(QueueSet {
                 queues: Vec::new(),

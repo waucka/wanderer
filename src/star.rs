@@ -19,7 +19,7 @@ use super::support::descriptor::{
     DescriptorRef,
     UniformBufferRef,
 };
-use super::support::renderer::{Pipeline, PipelineParameters, RenderPass};
+use super::support::renderer::{Pipeline, PipelineParameters, RenderPass, SubpassRef};
 use super::support::shader::{SimpleVertex, VertexShader, FragmentShader};
 use super::support::texture::{Texture, Sampler};
 use super::scene::Renderable;
@@ -58,7 +58,7 @@ impl StarInfo {
 
 struct StarRenderingData {
     instance_descriptor_set: Rc<DescriptorSet>,
-    uniform_buffer: Rc<UniformBuffer<StarInfo>>,
+    _uniform_buffer: Rc<UniformBuffer<StarInfo>>,
 }
 
 pub struct StarRenderer {
@@ -87,7 +87,7 @@ impl StarRenderer {
         window_width: usize,
         window_height: usize,
         render_pass: &RenderPass,
-        subpass: u32,
+        subpass: SubpassRef,
         msaa_samples: vk::SampleCountFlags,
     ) -> anyhow::Result<Self> {
         // Load shaders first; the files not being present is the most likely cause of failure in this function.
@@ -198,14 +198,13 @@ impl StarRenderer {
             vert_shader,
             frag_shader,
             &set_layouts,
-            PipelineParameters::new()
+            PipelineParameters::new(subpass)
                 .with_msaa_samples(msaa_samples)
                 .with_cull_mode(vk::CullModeFlags::BACK)
                 .with_front_face(vk::FrontFace::COUNTER_CLOCKWISE)
                 .with_depth_test()
                 .with_depth_write()
                 .with_depth_compare_op(vk::CompareOp::LESS)
-                .with_subpass(subpass),
         )?);
 
         let objects = Vec::new();
@@ -271,7 +270,7 @@ impl StarRenderer {
         let star_id = self.stars.len();
         self.stars.push(StarRenderingData{
             instance_descriptor_set,
-            uniform_buffer,
+            _uniform_buffer: uniform_buffer,
         });
         Ok(star_id)
     }
@@ -281,15 +280,11 @@ impl StarRenderer {
         self.stars.clear();
     }
 
-    pub fn get_instance_layout(&self) -> &DescriptorSetLayout {
-        &self.instance_descriptor_set_layout
-    }
-
     fn write_command_buffer(
         command_buffer: &Rc<SecondaryCommandBuffer>,
         frame: FrameId,
         render_pass: &RenderPass,
-        subpass: u32,
+        subpass: SubpassRef,
         global_descriptor_sets: &PerFrameSet<Rc<DescriptorSet>>,
         vertex_buffer: &Rc<VertexBuffer<SimpleVertex>>,
         index_buffer: &Rc<IndexBuffer>,
@@ -337,7 +332,7 @@ impl Renderable for StarRenderer {
         &self,
         device: &Device,
         render_pass: &RenderPass,
-        subpass: u32,
+        subpass: SubpassRef,
     ) -> anyhow::Result<()> {
         let global_descriptor_sets = &self.global_descriptor_sets;
         let vertex_buffer = &self.vertex_buffer;

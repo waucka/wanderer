@@ -2,7 +2,7 @@ use std::rc::Rc;
 
 use super::support::{Device, FrameId};
 use super::support::command_buffer::SecondaryCommandBuffer;
-use super::support::renderer::RenderPass;
+use super::support::renderer::{RenderPass, SubpassRef};
 
 pub trait Renderable {
     fn get_command_buffer(&self, frame: FrameId) -> anyhow::Result<Rc<SecondaryCommandBuffer>>;
@@ -10,7 +10,7 @@ pub trait Renderable {
         &self,
         device: &Device,
         render_pass: &RenderPass,
-        subpass: u32,
+        subpass: SubpassRef,
     ) -> anyhow::Result<()>;
     // TODO: figure out upload/use synchronization that doesn't rely on sitting around waiting for
     //       the buffer to be uploaded.
@@ -63,7 +63,7 @@ impl Scene {
         &self,
         device: &Device,
         render_pass: &RenderPass,
-        subpass: u32,
+        subpass: SubpassRef,
     ) -> anyhow::Result<()> {
         for renderable in self.renderables.iter() {
             renderable.rebuild_command_buffers(device, render_pass, subpass)?;
@@ -71,6 +71,7 @@ impl Scene {
         Ok(())
     }
 
+    #[allow(dead_code)]
     pub fn sync_uniform_buffers(&self, frame: FrameId) -> anyhow::Result<()> {
         for renderable in self.renderables.iter() {
             renderable.sync_uniform_buffers(frame)?;

@@ -162,6 +162,7 @@ float  intersectSphere(vec3 C, float r, vec3 P, vec3 w) {
 void main() {
   float current_time = camera.current_time;
   vec3 direction = normalize(fs_in.fragPos - camera.view_pos.xyz);
+  // TODO: add some noise to the radius
   float intersection_distance = intersectSphere(star_info.center.xyz,
                                                 star_info.radius,
                                                 camera.view_pos.xyz,

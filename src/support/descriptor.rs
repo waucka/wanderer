@@ -471,19 +471,8 @@ impl DescriptorPool {
                 layout.bindings.len(),
             ));
         }
-        dbg!(&self.name);
-        dbg!(self.sets.len());
 
-        let sets = match self.allocate(count, layout) {
-            Ok(sets) => sets,
-            Err(e) => {
-                dbg!(e);
-                dbg!(count);
-                dbg!(layout);
-                dbg!(self);
-                panic!("Failed to allocate descriptor sets");
-            },
-        };
+        let sets = self.allocate(count, layout)?;
         for set in sets.iter() {
             let mut writes = vec![];
             // These have to stick around until the call to update_descriptor_sets() returns.

@@ -10,7 +10,7 @@ use std::ptr;
 use std::os::raw::c_void;
 use std::pin::Pin;
 
-use super::{Device, InnerDevice, Queue, FrameId};
+use super::{Device, InnerDevice, Queue, FrameId, PerFrameSet};
 use super::image::{Image, ImageView, ImageBuilder};
 use super::texture::Texture;
 use super::shader::{VertexShader, FragmentShader, Vertex, GenericShader};
@@ -488,11 +488,11 @@ pub struct PipelineParameters {
     depth_test_enable: vk::Bool32,
     depth_write_enable: vk::Bool32,
     depth_compare_op: vk::CompareOp,
-    subpass: u32,
+    subpass: SubpassRef,
 }
 
 impl PipelineParameters {
-    pub fn new() -> Self {
+    pub fn new(subpass: SubpassRef) -> Self {
         Self{
             msaa_samples: vk::SampleCountFlags::TYPE_1,
             cull_mode: vk::CullModeFlags::BACK,
@@ -502,7 +502,7 @@ impl PipelineParameters {
             depth_test_enable: vk::FALSE,
             depth_write_enable: vk::FALSE,
             depth_compare_op: vk::CompareOp::ALWAYS,
-            subpass: 0,
+            subpass,
         }
     }
 
@@ -545,11 +545,6 @@ impl PipelineParameters {
 
     pub fn with_depth_write(mut self) -> Self {
         self.depth_write_enable = vk::TRUE;
-        self
-    }
-
-    pub fn with_subpass(mut self, subpass: u32) -> Self {
-        self.subpass = subpass;
         self
     }
 }
@@ -840,7 +835,7 @@ where
             p_dynamic_state: ptr::null(),
             layout: pipeline_layout,
             render_pass: render_pass,
-            subpass: params.subpass,
+            subpass: params.subpass.into(),
             base_pipeline_handle: vk::Pipeline::null(),
             base_pipeline_index: -1,
         }];
@@ -1194,7 +1189,7 @@ impl Subpass {
 }
 
 pub struct AttachmentSet {
-    attachments: Vec<Rc<Texture>>,
+    attachments: Vec<PerFrameSet<Rc<Texture>>>,
 }
 
 impl AttachmentSet {
@@ -1214,16 +1209,16 @@ impl AttachmentSet {
         })
     }
 
-    pub fn get(&self, att_ref: &AttachmentRef) -> Rc<Texture> {
+    pub fn get(&self, frame: FrameId, att_ref: &AttachmentRef) -> Rc<Texture> {
         // We subtract one from the index because the index is based on the first attachment
         // being the swapchain attachment.
-        self.attachments[att_ref.idx - 1].clone()
+        self.attachments[att_ref.idx - 1].get(frame).clone()
     }
 
-    pub (in super) fn get_image_views(&self) -> Vec<vk::ImageView> {
+    pub (in super) fn get_image_views(&self, frame: FrameId) -> Vec<vk::ImageView> {
         let mut image_views = Vec::new();
         for att in self.attachments.iter() {
-            image_views.push(att.image_view.view);
+            image_views.push(att.get(frame).image_view.view);
         }
         image_views
     }
@@ -1233,25 +1228,27 @@ impl AttachmentSet {
         width: usize,
         height: usize,
         msaa_samples: vk::SampleCountFlags,
-    ) -> anyhow::Result<Vec<Rc<Texture>>> {
+    ) -> anyhow::Result<Vec<PerFrameSet<Rc<Texture>>>> {
         let mut textures = Vec::new();
         // Skip the first attachment in the list.  By convention, that one is the swapchain image.
         let att_slice = &render_pass.attachments[1..];
         for att in att_slice.iter() {
-            textures.push(
-                Rc::new(
-                    Texture::from_image_builder_internal(
-                        render_pass.device.clone(),
-                        att.aspect,
-                        1,
-                        att.initial_layout,
-                        ImageBuilder::new2d(width, height)
-                            .with_num_samples(msaa_samples)
-                            .with_format(att.format)
-                            .with_usage(att.usage)
-                    )?
-                )
-            );
+            textures.push(PerFrameSet::new(
+                |_| {
+                    Ok(Rc::new(
+                        Texture::from_image_builder_internal(
+                            render_pass.device.clone(),
+                            att.aspect,
+                            1,
+                            att.initial_layout,
+                            ImageBuilder::new2d(width, height)
+                                .with_num_samples(msaa_samples)
+                                .with_format(att.format)
+                                .with_usage(att.usage)
+                        )?
+                    ))
+                }
+            )?);
         }
         Ok(textures)
     }

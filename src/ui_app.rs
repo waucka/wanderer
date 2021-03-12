@@ -20,7 +20,7 @@ use super::support::descriptor::{
     UniformBufferRef,
     CombinedRef,
 };
-use super::support::renderer::{Pipeline, PipelineParameters, RenderPass};
+use super::support::renderer::{Pipeline, PipelineParameters, RenderPass, SubpassRef};
 use super::support::shader::{VertexShader, FragmentShader};
 use super::support::texture::{Texture, Sampler};
 use super::utils::{Vector2f, Vector4f};
@@ -39,6 +39,7 @@ pub trait UIApp {
 }
 
 pub struct AppContext {
+    #[allow(unused)]
     should_quit: bool,
 }
 
@@ -49,20 +50,27 @@ impl AppContext {
         }
     }
 
+    #[allow(unused)]
     pub fn signal_quit(&mut self) {
         self.should_quit = true;
     }
 
+    #[allow(unused)]
     pub fn quit_signaled(&self) -> bool {
         self.should_quit
     }
 }
 
 pub enum UniformDataVar {
+    #[allow(unused)]
     Bool(bool),
+    #[allow(unused)]
     UInt(u32),
+    #[allow(unused)]
     SFloat(f32),
+    #[allow(unused)]
     Vec2(Vector2f),
+    #[allow(unused)]
     Vec4(Vector4f),
 }
 
@@ -100,6 +108,7 @@ pub struct UniformDataItemSliderUInt {
 }
 
 impl UniformDataItemSliderUInt {
+    #[allow(unused)]
     pub fn new(value: u32, range: core::ops::RangeInclusive<u32>, logarithmic: bool) -> Self {
         Self{
             value,
@@ -242,7 +251,7 @@ impl UIApp for UniformTwiddler {
         "Uniform Twiddler"
     }
 
-    fn update(&self, ctx: &egui::CtxRef, app_ctx: &mut AppContext) {
+    fn update(&self, ctx: &egui::CtxRef, _app_ctx: &mut AppContext) {
         let mut items = self.uniform_data.get_items_mut();
         let order = self.uniform_data.get_order();
         egui::Window::new(&self.title)
@@ -276,8 +285,11 @@ struct RenderingSet {
 
 struct FrameData {
     rendering_sets: Vec<RenderingSet>,
+    #[allow(unused)]
     sampler: Rc<Sampler>,
+    #[allow(unused)]
     texture: Rc<Texture>,
+    #[allow(unused)]
     texture_version: u64,
 }
 
@@ -287,7 +299,7 @@ impl FrameData {
         device: &Device,
         pool: Rc<CommandPool>,
         render_pass: &RenderPass,
-        subpass: u32,
+        subpass: SubpassRef,
         pipeline: &Rc<Pipeline<egui::paint::Vertex>>,
     ) -> anyhow::Result<Rc<SecondaryCommandBuffer>> {
         let command_buffer = SecondaryCommandBuffer::new(
@@ -349,7 +361,7 @@ impl UIAppRenderer {
         window_width: usize,
         window_height: usize,
         render_pass: &RenderPass,
-        subpass: u32,
+        subpass: SubpassRef,
         graphics_queue: Rc<Queue>,
     ) -> anyhow::Result<Self> {
         let descriptor_pools = {
@@ -411,10 +423,9 @@ impl UIAppRenderer {
             vert_shader,
             frag_shader,
             &set_layouts,
-            PipelineParameters::new()
+            PipelineParameters::new(subpass)
                 .with_cull_mode(vk::CullModeFlags::NONE)
                 .with_front_face(vk::FrontFace::COUNTER_CLOCKWISE)
-                .with_subpass(subpass),
         )?);
 
         let command_pool = CommandPool::new(
@@ -517,6 +528,7 @@ impl UIAppRenderer {
         Ok(())
     }
 
+    #[allow(unused)]
     pub fn clear_frame_data(&mut self) {
         self.frame_data.clear();
     }
@@ -525,7 +537,7 @@ impl UIAppRenderer {
         &self,
         device: &Device,
         render_pass: &RenderPass,
-        subpass: u32,
+        subpass: SubpassRef,
     ) -> anyhow::Result<Rc<SecondaryCommandBuffer>> {
         let command_buffer = SecondaryCommandBuffer::new(
             device,
@@ -552,7 +564,7 @@ impl UIAppRenderer {
         &mut self,
         device: &Device,
         render_pass: &RenderPass,
-        subpass: u32,
+        subpass: SubpassRef,
     ) -> anyhow::Result<Rc<SecondaryCommandBuffer>> {
         if self.frame_data.len() < 2 {
             // Don't use data that might not have been uploaded yet.

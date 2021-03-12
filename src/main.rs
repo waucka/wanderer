@@ -16,6 +16,8 @@ mod utils;
 mod support;
 mod scene;
 mod objects;
+mod postproc;
+mod hdr;
 mod star;
 mod models;
 mod ui_app;
@@ -30,7 +32,6 @@ use support::descriptor::{
     DescriptorSet,
     DescriptorSetLayout,
     DescriptorRef,
-    InputAttachmentRef,
     UniformBufferRef,
 };
 use support::renderer::{
@@ -45,7 +46,9 @@ use support::renderer::{
 };
 use support::texture::{Material, Texture};
 use support::buffer::{VertexBuffer/*, IndexBuffer*/, UniformBuffer};
-use objects::{StaticGeometryRenderer, PostProcessingStep};
+use objects::StaticGeometryRenderer;
+use postproc::PostProcStep;
+use hdr::{HdrStep, HdrControlUniform};
 use scene::{Scene, Renderable};
 use ui_app::{UIApp, UIAppRenderer};
 use utils::{Matrix4f, Vector4f};
@@ -111,65 +114,6 @@ impl GlobalUniform {
     }
 }
 
-#[derive(Debug, Default, Clone, Copy, Uniform)]
-struct HdrControlUniform {
-    #[allow(unused)]
-    exposure: f32,
-    #[allow(unused)]
-    white_luminance: f32,
-    #[allow(unused)]
-    algo: u32,
-}
-
-impl HdrControlUniform {
-    fn get_twiddler_data(&self) -> Rc<ui_app::UniformData> {
-        let mut data = ui_app::UniformData::new();
-        data.add(
-            "exposure",
-            "Exposure",
-            ui_app::UniformDataItemSliderSFloat::new(self.exposure, -20.0..=20.0, false),
-        );
-        data.add(
-            "white_luminance",
-            "White luminance",
-            ui_app::UniformDataItemSliderSFloat::new(self.exposure, 0.00001..=100000.0, true),
-        );
-        data.add(
-            "algo",
-            "Tonemapping algorithm",
-            ui_app::UniformDataItemRadio::new(
-                self.algo,
-                vec![
-                    ("No-op".to_owned(), 0),
-                    ("Linear".to_owned(), 1),
-                    ("Reinhard simple".to_owned(), 2),
-                    ("Reinhard enhanced".to_owned(), 3),
-                    ("Uncharted 2".to_owned(), 4),
-                    ("ACES".to_owned(), 5),
-                    ("Invalid".to_owned(), 9001),
-                ],
-            ),
-        );
-        Rc::new(data)
-    }
-
-    fn set_data(&mut self, twiddler: Rc<ui_app::UniformTwiddler>) {
-        let uniform_data = twiddler.get_uniform_data();
-
-        if let Some(ui_app::UniformDataVar::SFloat(exposure)) = uniform_data.get_value("exposure") {
-            self.exposure = exposure;
-        }
-
-        if let Some(ui_app::UniformDataVar::SFloat(white_luminance)) = uniform_data.get_value("white_luminance") {
-            self.white_luminance = white_luminance;
-        }
-
-        if let Some(ui_app::UniformDataVar::UInt(algo)) = uniform_data.get_value("algo") {
-            self.algo = algo;
-        }
-    }
-}
-
 struct SecondaryBufferSet {
     scene: Vec<Rc<SecondaryCommandBuffer>>,
     hdr: Rc<SecondaryCommandBuffer>,
@@ -200,7 +144,7 @@ impl UIManager {
         window_width: usize,
         window_height: usize,
         render_pass: &RenderPass,
-        subpass: u32,
+        subpass: SubpassRef,
     ) -> anyhow::Result<Self> {
         let egui_ctx = egui::CtxRef::default();
         let mut style: egui::style::Style = egui::style::Style::clone(&egui_ctx.style());
@@ -254,7 +198,7 @@ impl UIManager {
         &self,
         device: &Device,
         render_pass: &RenderPass,
-        subpass: u32,
+        subpass: SubpassRef,
     ) -> anyhow::Result<Rc<SecondaryCommandBuffer>> {
         self.renderer.borrow_mut().create_command_buffer(
             device,
@@ -297,18 +241,12 @@ struct GlobalFrameData {
     uniform_buffer: Rc<UniformBuffer<GlobalUniform>>,
 }
 
-struct HdrFrameData {
-    descriptor_set: Rc<DescriptorSet>,
-    uniform_buffer: Rc<UniformBuffer<HdrControlUniform>>,
-}
-
 struct VulkanApp21 {
     device: Device,
     presenter: Presenter,
     render_pass: RenderPass,
     #[allow(unused)]
     global_pool: DescriptorPool,
-    hdr_pool: DescriptorPool,
     #[allow(unused)]
     global_descriptor_set_layout: DescriptorSetLayout,
     global_frame_data: PerFrameSet<GlobalFrameData>,
@@ -318,9 +256,7 @@ struct VulkanApp21 {
     scene: Scene,
     attachment_set: AttachmentSet,
     render_target_color: AttachmentRef,
-    hdr: PostProcessingStep,
-    hdr_frame_data: PerFrameSet<HdrFrameData>,
-    hdr_descriptor_set_layout: DescriptorSetLayout,
+    hdr: HdrStep,
     ui_manager: UIManager,
     materials: Vec<Rc<Material>>,
     _model: ModelNonIndexed,
@@ -375,8 +311,7 @@ impl VulkanApp21 {
         let render_target_color = render_pass_builder.add_attachment(AttachmentDescription::new(
             true,
             vk::ImageUsageFlags::COLOR_ATTACHMENT |
-            vk::ImageUsageFlags::INPUT_ATTACHMENT |
-            vk::ImageUsageFlags::TRANSIENT_ATTACHMENT,
+            vk::ImageUsageFlags::INPUT_ATTACHMENT,
             device.get_float_target_format()?,
             vk::ImageAspectFlags::COLOR,
             vk::AttachmentLoadOp::CLEAR,
@@ -389,8 +324,7 @@ impl VulkanApp21 {
         let render_target_depth = render_pass_builder.add_attachment(AttachmentDescription::standard_depth(
             depth_format,
             true,
-            vk::ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT |
-            vk::ImageUsageFlags::TRANSIENT_ATTACHMENT
+            vk::ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT,
         ));
         let presentation_target = render_pass_builder.get_swapchain_attachment();
         // Rendering subpass
@@ -469,24 +403,6 @@ impl VulkanApp21 {
             );
             DescriptorPool::new(
                 "Global",
-                &device,
-                pool_sizes,
-                10,
-            )?
-        };
-
-        let mut hdr_pool = {
-            let mut pool_sizes: HashMap<vk::DescriptorType, u32> = HashMap::new();
-            pool_sizes.insert(
-                vk::DescriptorType::UNIFORM_BUFFER,
-                10,
-            );
-            pool_sizes.insert(
-                vk::DescriptorType::INPUT_ATTACHMENT,
-                10,
-            );
-            DescriptorPool::new(
-                "HDR",
                 &device,
                 pool_sizes,
                 10,
@@ -626,7 +542,7 @@ impl VulkanApp21 {
             WINDOW_WIDTH,
             WINDOW_HEIGHT,
             &render_pass,
-            rendering_subpass.into(),
+            rendering_subpass,
             msaa_samples,
         )?;
         viking_room_geometry.add(
@@ -652,7 +568,7 @@ impl VulkanApp21 {
             WINDOW_WIDTH,
             WINDOW_HEIGHT,
             &render_pass,
-            rendering_subpass.into(),
+            rendering_subpass,
             msaa_samples,
         )?;
         star_renderer.add(
@@ -701,77 +617,34 @@ impl VulkanApp21 {
 
         // Begin HDR setup
 
-        let hdr_descriptor_bindings = DescriptorBindings::new()
-            .with_binding(
-                vk::DescriptorType::INPUT_ATTACHMENT,
-                1,
-                vk::ShaderStageFlags::FRAGMENT,
-                false,
-            )
-            .with_binding(
-                vk::DescriptorType::UNIFORM_BUFFER,
-                1,
-                vk::ShaderStageFlags::FRAGMENT,
-                false,
-            );
-        let hdr_descriptor_set_layout = DescriptorSetLayout::new(
-            &device,
-            hdr_descriptor_bindings,
+        let hdr_control_uniform = HdrControlUniform::new(
+            0.0,
+            4.0,
+            hdr::Algorithm::Aces,
+        );
+
+        let render_targets = PerFrameSet::new(
+            |frame| {
+                Ok(attachment_set.get(frame, &render_target_color))
+            }
         )?;
 
-        let hdr_control_uniform = HdrControlUniform{
-            exposure: 0.0,
-            white_luminance: 4.0,
-            algo: 4,
-        };
-
+        let hdr_step = HdrStep::new(
+            &device,
+            device.get_default_graphics_queue(),
+            &render_targets,
+            &hdr_control_uniform,
+            WINDOW_WIDTH,
+            WINDOW_HEIGHT,
+            &render_pass,
+            postprocessing_subpass,
+        )?;
         let hdr_twiddler_app = Rc::new(
             ui_app::UniformTwiddler::new(
                 "HDR Lighting",
                 hdr_control_uniform.get_twiddler_data(),
             )
         );
-
-        let hdr_frame_data = PerFrameSet::new(
-            |_| {
-                let uniform_buffer = Rc::new(UniformBuffer::new(
-                    &device,
-                    Some(&hdr_control_uniform),
-                )?);
-
-                let items: Vec<Rc<dyn DescriptorRef>> = vec![
-                    Rc::new(InputAttachmentRef::new(
-                        attachment_set.get(&render_target_color),
-                        vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
-                    )),
-                    Rc::new(UniformBufferRef::new(vec![Rc::clone(&uniform_buffer)])),
-                ];
-                let sets = hdr_pool.create_descriptor_sets(
-                    1,
-                    &hdr_descriptor_set_layout,
-                    &items,
-                )?;
-
-                Ok(HdrFrameData{
-                    descriptor_set: Rc::clone(&sets[0]),
-                    uniform_buffer,
-                })
-            },
-        )?;
-
-        let hdr = PostProcessingStep::new(
-            &device,
-            &hdr_descriptor_set_layout,
-            hdr_frame_data.extract(
-                |frame_data| {
-                    Ok(Rc::clone(&frame_data.descriptor_set))
-                }
-            )?,
-            WINDOW_WIDTH,
-            WINDOW_HEIGHT,
-            &render_pass,
-            postprocessing_subpass.into(),
-        )?;
 
         // End HDR setup
 
@@ -780,7 +653,7 @@ impl VulkanApp21 {
             WINDOW_WIDTH,
             WINDOW_HEIGHT,
             &render_pass,
-            ui_subpass.into(),
+            ui_subpass,
         )?;
 
         Ok({
@@ -789,7 +662,6 @@ impl VulkanApp21 {
                 presenter,
                 render_pass,
                 global_pool,
-                hdr_pool,
                 global_descriptor_set_layout,
                 global_frame_data,
                 global_uniform,
@@ -797,9 +669,7 @@ impl VulkanApp21 {
                 scene,
                 attachment_set,
                 render_target_color,
-                hdr,
-                hdr_frame_data,
-                hdr_descriptor_set_layout,
+                hdr: hdr_step,
                 ui_manager,
                 materials,
                 _model: model,
@@ -830,12 +700,7 @@ impl VulkanApp21 {
         self.scene.rebuild_command_buffers(
             &self.device,
             &self.render_pass,
-            self.rendering_subpass.into(),
-        )?;
-        self.hdr.rebuild_command_buffers(
-            &self.device,
-            &self.render_pass,
-            self.postprocessing_subpass.into(),
+            self.rendering_subpass,
         )?;
         Ok(())
     }
@@ -844,11 +709,11 @@ impl VulkanApp21 {
         &self,
         frame: FrameId,
         render_pass: &RenderPass,
-        subpass: u32,
+        subpass: SubpassRef,
     ) -> anyhow::Result<SecondaryBufferSet> {
         Ok(SecondaryBufferSet {
             scene: self.scene.get_command_buffers(frame)?,
-            hdr: self.hdr.get_command_buffer(frame)?,
+            hdr: self.hdr.get_command_buffer(frame),
             ui: self.ui_manager.get_command_buffer(
                 &self.device,
                 render_pass,
@@ -922,7 +787,7 @@ impl VulkanApp21 {
         self.hdr_control_uniform.set_data(Rc::clone(&self.hdr_twiddler_app));
 
         self.global_frame_data.get(frame).uniform_buffer.update(uniform_transform)?;
-        self.hdr_frame_data.get(frame).uniform_buffer.update(&self.hdr_control_uniform)?;
+        self.hdr.update(frame, &self.hdr_control_uniform)?;
         Ok(())
     }
 
@@ -933,10 +798,25 @@ impl VulkanApp21 {
             height,
             &self.render_pass,
         )?;
-        self.hdr.update_pipeline_viewport(
+
+        self.attachment_set.resize(
+            &self.render_pass,
+            width,
+            height,
+            self.msaa_samples,
+        )?;
+        let hdr_pixel_sources = PerFrameSet::new(
+            |frame| {
+                Ok(self.attachment_set.get(frame, &self.render_target_color))
+            }
+        )?;
+
+        self.hdr.update_viewport(
+            &hdr_pixel_sources,
             width,
             height,
             &self.render_pass,
+            self.postprocessing_subpass,
         )?;
         self.ui_manager.update_pipeline_viewport(
             width,
@@ -957,31 +837,6 @@ impl VulkanApp21 {
             proj.into()
         };
 
-        self.attachment_set.resize(&self.render_pass, width, height, self.msaa_samples)?;
-        let hdr = &mut self.hdr;
-        let hdr_pool = &mut self.hdr_pool;
-        let hdr_descriptor_set_layout = &self.hdr_descriptor_set_layout;
-        let render_target_color = &self.attachment_set.get(&self.render_target_color);
-        let hdr_frame_data = &self.hdr_frame_data;
-        hdr.replace_descriptor_sets(
-            |frame, _| {
-                let items: Vec<Rc<dyn DescriptorRef>> = vec![
-                    Rc::new(InputAttachmentRef::new(
-                        Rc::clone(render_target_color),
-                        vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
-                    )),
-                    Rc::new(UniformBufferRef::new(vec![
-                        Rc::clone(&hdr_frame_data.get(frame).uniform_buffer),
-                    ])),
-                ];
-                let sets = hdr_pool.create_descriptor_sets(
-                    1,
-                    hdr_descriptor_set_layout,
-                    &items,
-                )?;
-                Ok(Rc::clone(&sets[0]))
-            }
-        )?;
         // TODO: I don't like having this in here, but any resize operation requires
         //       the command buffers to be re-created, right?
         self.rebuild_command_buffers()?;
@@ -1030,7 +885,7 @@ impl VulkanApp for VulkanApp21 {
         } = self.get_secondary_buffers(
             frame,
             &self.render_pass,
-            self.ui_subpass.into(),
+            self.ui_subpass,
         )?;
 
         // Create the current frame's command buffer
@@ -1063,6 +918,7 @@ impl VulkanApp for VulkanApp21 {
                 primary_writer.begin_render_pass(
                     &self.presenter,
                     &self.render_pass,
+                    frame,
                     &clear_values,
                     &self.attachment_set,
                     image_index as usize,

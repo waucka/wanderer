@@ -20,6 +20,7 @@ pub struct Texture {
 }
 
 impl Texture {
+    #[allow(dead_code)]
     pub fn from_float_tex(
         device: &Device,
         path: &Path,
@@ -91,6 +92,7 @@ impl Texture {
         })
     }
 
+    #[allow(dead_code)]
     pub fn from_exr(
         device: &Device,
         path: &Path,
@@ -249,6 +251,7 @@ impl Texture {
         })
     }
 
+    #[allow(dead_code)]
     pub fn from_image_builder(
         device: &Device,
         aspect: vk::ImageAspectFlags,

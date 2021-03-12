@@ -20,11 +20,11 @@ use super::support::descriptor::{
     DescriptorRef,
     UniformBufferRef,
 };
-use super::support::renderer::{Pipeline, PipelineParameters, RenderPass};
+use super::support::renderer::{Pipeline, PipelineParameters, RenderPass, SubpassRef};
 use super::support::shader::{Vertex, VertexShader, FragmentShader};
 use super::support::texture::Material;
 use super::scene::Renderable;
-use super::utils::{NullVertex, Vector4f, Matrix4f};
+use super::utils::{Vector4f, Matrix4f};
 
 const DEBUG_DESCRIPTOR_SETS: bool = false;
 
@@ -38,13 +38,13 @@ pub struct StaticGeometryTypeUBO {
 
 pub struct StaticGeometryRenderer<V: Vertex> {
     global_descriptor_sets: PerFrameSet<Rc<DescriptorSet>>,
-    type_descriptor_set_layout: DescriptorSetLayout,
+    _type_descriptor_set_layout: DescriptorSetLayout,
     type_descriptor_set: Rc<DescriptorSet>,
     instance_descriptor_set_layout: DescriptorSetLayout,
     vertex_buffer: Rc<VertexBuffer<V>>,
     index_buffer: Option<Rc<IndexBuffer>>,
-    uniform_buffer: Rc<UniformBuffer<StaticGeometryTypeUBO>>,
-    type_pool: DescriptorPool,
+    _uniform_buffer: Rc<UniformBuffer<StaticGeometryTypeUBO>>,
+    _type_pool: DescriptorPool,
     instance_pool: DescriptorPool,
     objects: Vec<StaticGeometry>,
     pipeline: Rc<Pipeline<V>>,
@@ -70,7 +70,7 @@ impl<V: Vertex + 'static> StaticGeometryRenderer<V> {
         window_width: usize,
         window_height: usize,
         render_pass: &RenderPass,
-        subpass: u32,
+        subpass: SubpassRef,
         msaa_samples: vk::SampleCountFlags,
     ) -> anyhow::Result<Self> {
         // Load shaders first; the files not being present is the most likely cause of failure in this function.
@@ -239,14 +239,13 @@ impl<V: Vertex + 'static> StaticGeometryRenderer<V> {
             vert_shader,
             frag_shader,
             &set_layouts,
-            PipelineParameters::new()
+            PipelineParameters::new(subpass)
                 .with_msaa_samples(msaa_samples)
                 .with_cull_mode(vk::CullModeFlags::BACK)
                 .with_front_face(vk::FrontFace::COUNTER_CLOCKWISE)
                 .with_depth_test()
                 .with_depth_write()
                 .with_depth_compare_op(vk::CompareOp::LESS)
-                .with_subpass(subpass),
         )?);
 
         let objects = Vec::new();
@@ -274,13 +273,13 @@ impl<V: Vertex + 'static> StaticGeometryRenderer<V> {
 
         Ok(Self{
             global_descriptor_sets,
-            type_descriptor_set_layout,
+            _type_descriptor_set_layout: type_descriptor_set_layout,
             type_descriptor_set,
             instance_descriptor_set_layout,
             vertex_buffer,
             index_buffer,
-            uniform_buffer,
-            type_pool,
+            _uniform_buffer: uniform_buffer,
+            _type_pool: type_pool,
             instance_pool,
             objects,
             pipeline,
@@ -317,7 +316,7 @@ impl<V: Vertex + 'static> StaticGeometryRenderer<V> {
         let object_id = self.objects.len();
         self.objects.push(StaticGeometry{
             instance_descriptor_set,
-            uniform_buffer,
+            _uniform_buffer: uniform_buffer,
         });
         Ok(object_id)
     }
@@ -336,19 +335,11 @@ impl<V: Vertex + 'static> StaticGeometryRenderer<V> {
         }
     }
 
-    pub fn get_type_layout(&self) -> &DescriptorSetLayout {
-        &self.type_descriptor_set_layout
-    }
-
-    pub fn get_instance_layout(&self) -> &DescriptorSetLayout {
-        &self.instance_descriptor_set_layout
-    }
-
     fn write_command_buffer(
         command_buffer: &Rc<SecondaryCommandBuffer>,
         frame: FrameId,
         render_pass: &RenderPass,
-        subpass: u32,
+        subpass: SubpassRef,
         global_descriptor_sets: &PerFrameSet<Rc<DescriptorSet>>,
         type_descriptor_set: &Rc<DescriptorSet>,
         vertex_buffer: &Rc<VertexBuffer<V>>,
@@ -404,7 +395,7 @@ impl<V: Vertex + 'static> Renderable for StaticGeometryRenderer<V> {
         &self,
         device: &Device,
         render_pass: &RenderPass,
-        subpass: u32,
+        subpass: SubpassRef,
     ) -> anyhow::Result<()> {
         let global_descriptor_sets = &self.global_descriptor_sets;
         let type_descriptor_set = &self.type_descriptor_set;
@@ -461,164 +452,5 @@ pub struct StaticGeometryInstanceUBO {
 
 pub struct StaticGeometry {
     instance_descriptor_set: Rc<DescriptorSet>,
-    uniform_buffer: Rc<UniformBuffer<StaticGeometryInstanceUBO>>,
-}
-
-//TODO: This should probably be moved to a new module called "postprocessing" or something.
-
-pub struct PostProcessingStep {
-    global_descriptor_sets: PerFrameSet<Rc<DescriptorSet>>,
-    pipeline: Rc<Pipeline<NullVertex>>,
-    command_buffers: RefCell<PerFrameSet<Rc<SecondaryCommandBuffer>>>,
-}
-
-impl PostProcessingStep {
-    pub fn new(
-        device: &Device,
-        global_descriptor_set_layout: &DescriptorSetLayout,
-        global_descriptor_sets: PerFrameSet<Rc<DescriptorSet>>,
-        window_width: usize,
-        window_height: usize,
-        render_pass: &RenderPass,
-        subpass: u32,
-    ) -> anyhow::Result<Self> {
-        let vert_shader: VertexShader<NullVertex> =
-            VertexShader::from_spv_file(
-                device,
-                Path::new("./assets/shaders/hdr.vert.spv"),
-            )?;
-        let frag_shader = FragmentShader::from_spv_file(
-            device,
-            Path::new("./assets/shaders/hdr.frag.spv"),
-        )?;
-
-        let set_layouts = [global_descriptor_set_layout];
-
-        let pipeline = Rc::new(Pipeline::new(
-            &device,
-            window_width,
-            window_height,
-            render_pass,
-            vert_shader,
-            frag_shader,
-            &set_layouts,
-            PipelineParameters::new()
-                .with_cull_mode(vk::CullModeFlags::FRONT)
-                .with_front_face(vk::FrontFace::COUNTER_CLOCKWISE)
-                .with_subpass(1),
-        )?);
-
-        let command_buffers = RefCell::new(PerFrameSet::new(
-            |frame| {
-                let command_buffer = SecondaryCommandBuffer::new(
-                    device,
-                    device.get_default_graphics_pool(),
-                )?;
-                PostProcessingStep::write_command_buffer(
-                    &command_buffer,
-                    frame,
-                    render_pass,
-                    subpass,
-                    &global_descriptor_sets,
-                    &pipeline,
-                )?;
-                Ok(command_buffer)
-            },
-        )?);
-
-        Ok(Self{
-            global_descriptor_sets,
-            pipeline,
-            command_buffers,
-        })
-    }
-
-    pub fn replace_descriptor_sets<F>(&mut self, replacer: F) -> anyhow::Result<()>
-    where
-        F: FnMut(FrameId, &Rc<DescriptorSet>) -> anyhow::Result<Rc<DescriptorSet>>
-    {
-        self.global_descriptor_sets.replace(replacer)
-    }
-
-    fn write_command_buffer(
-        command_buffer: &Rc<SecondaryCommandBuffer>,
-        frame: FrameId,
-        render_pass: &RenderPass,
-        subpass: u32,
-        global_descriptor_sets: &PerFrameSet<Rc<DescriptorSet>>,
-        pipeline: &Rc<Pipeline<NullVertex>>,
-    ) -> anyhow::Result<()> {
-        command_buffer.record(
-            vk::CommandBufferUsageFlags::RENDER_PASS_CONTINUE,
-            render_pass,
-            subpass,
-            |writer| {
-                writer.join_render_pass(
-                    |rp_writer| {
-                        rp_writer.bind_pipeline(Rc::clone(pipeline));
-                        let descriptor_sets = [
-                            Rc::clone(&global_descriptor_sets.get(frame)),
-                        ];
-                        if DEBUG_DESCRIPTOR_SETS {
-                            println!("Binding descriptor sets...");
-                            println!("\tSet 0: {:?}", descriptor_sets[0]);
-                        }
-                        rp_writer.bind_descriptor_sets(pipeline.get_layout(), &descriptor_sets);
-                        rp_writer.draw_no_vbo(3, 1);
-                        Ok(())
-                    },
-                )
-            },
-        )
-    }
-}
-
-impl Renderable for PostProcessingStep {
-    fn get_command_buffer(&self, frame: FrameId) -> anyhow::Result<Rc<SecondaryCommandBuffer>> {
-        Ok(Rc::clone(self.command_buffers.borrow().get(frame)))
-    }
-
-    fn rebuild_command_buffers(
-        &self,
-        device: &Device,
-        render_pass: &RenderPass,
-        subpass: u32,
-    ) -> anyhow::Result<()> {
-        let global_descriptor_sets = &self.global_descriptor_sets;
-        let pipeline = &self.pipeline;
-        self.command_buffers.borrow_mut().replace(
-            |frame, _| {
-                let command_buffer = SecondaryCommandBuffer::new(
-                    device,
-                    device.get_default_graphics_pool(),
-                )?;
-                PostProcessingStep::write_command_buffer(
-                    &command_buffer,
-                    frame,
-                    render_pass,
-                    subpass,
-                    global_descriptor_sets,
-                    pipeline,
-                )?;
-                Ok(command_buffer)
-            },
-        )
-    }
-
-    fn sync_uniform_buffers(&self, _frame: FrameId) -> anyhow::Result<()> {
-        Ok(())
-    }
-
-    fn update_pipeline_viewport(
-        &self,
-        viewport_width: usize,
-        viewport_height: usize,
-        render_pass: &RenderPass,
-    ) -> anyhow::Result<()> {
-        self.pipeline.update_viewport(
-            viewport_width,
-            viewport_height,
-            render_pass,
-        )
-    }
+    _uniform_buffer: Rc<UniformBuffer<StaticGeometryInstanceUBO>>,
 }
