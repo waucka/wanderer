@@ -1,5 +1,6 @@
 use ash::version::{EntryV1_0, InstanceV1_0};
 use ash::vk;
+use anyhow::anyhow;
 
 #[cfg(target_os = "windows")]
 use ash::extensions::khr::Win32Surface;
@@ -98,8 +99,14 @@ unsafe fn create_wayland_surface<E: EntryV1_0, I: InstanceV1_0>(
     use std::ptr;
     use winit::platform::unix::WindowExtUnix;
 
-    let wayland_display = window.wayland_display().unwrap();
-    let wayland_surface = window.wayland_surface().unwrap();
+    let wayland_display = match window.wayland_display() {
+        Some(display) => display,
+        None => return Err(anyhow!("Failed to create Wayland display")),
+    };
+    let wayland_surface = match window.wayland_surface() {
+        Some(surface) => surface,
+        None => return Err(anyhow!("Failed to create Wayland surface")),
+    };
     let wayland_create_info = vk::WaylandSurfaceCreateInfoKHR {
         s_type: vk::StructureType::WAYLAND_SURFACE_CREATE_INFO_KHR,
         p_next: ptr::null(),

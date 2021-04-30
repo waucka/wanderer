@@ -2,6 +2,8 @@
 
 COMMON_ARGS="--target-env vulkan1.2"
 
+mkdir -p ./assets/shaders
+
 glslangValidator -V lighting.vert.glsl $COMMON_ARGS -o ./assets/shaders/lighting.vert.spv || exit 1
 glslangValidator -V lighting.frag.glsl $COMMON_ARGS -o ./assets/shaders/lighting.frag.spv || exit 1
 
