@@ -119,7 +119,7 @@ impl Texture {
                             r, g, b,
                         );
                         let y = position.y() + 1;
-                        pixel_vector[y * position.x() * 3 + 0] = r;
+                        pixel_vector[y * position.x() * 3    ] = r;
                         pixel_vector[y * position.x() * 3 + 1] = g;
                         pixel_vector[y * position.x() * 3 + 2] = b;
                     },
@@ -275,7 +275,7 @@ impl Texture {
         desired_layout: vk::ImageLayout,
         builder: ImageBuilder,
     ) -> anyhow::Result<Self> {
-        let mut image = Image::new_internal(device.clone(), builder)?;
+        let mut image = Image::new_internal(device, builder)?;
         image.transition_layout(vk::ImageLayout::UNDEFINED, desired_layout, mip_levels)?;
         let image_view = Rc::new(ImageView::from_image(
             &image,
@@ -326,7 +326,7 @@ impl Texture {
             1
         };
 
-        if image_size <= 0 {
+        if image_size == 0 {
             panic!("Failed to load texture image");
         }
 
@@ -429,9 +429,9 @@ impl Sampler {
             s_type: vk::StructureType::SAMPLER_CREATE_INFO,
             p_next: ptr::null(),
             flags: vk::SamplerCreateFlags::empty(),
-            min_filter: min_filter,
-            mag_filter: mag_filter,
-            mipmap_mode: mipmap_mode,
+            min_filter,
+            mag_filter,
+            mipmap_mode,
             address_mode_u: address_mode,
             address_mode_v: address_mode,
             address_mode_w: address_mode,
