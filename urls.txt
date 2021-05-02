@@ -46,3 +46,19 @@ http://dig.ccmixter.org/games
 https://www.saschawillems.de/blog/2016/05/28/tutorial-on-using-vulkans-vk_ext_debug_marker-with-renderdoc/
 # Memory usage tips and other stuff
 https://zeux.io/2020/02/27/writing-an-efficient-vulkan-renderer/
+# Procedural animation
+https://www.youtube.com/watch?v=LNidsMesxSE
+# Ship types
+https://www.youtube.com/watch?v=aj6COIw8vOc
+# Atmosphere
+https://developer.nvidia.com/gpugems/gpugems2/part-ii-shading-lighting-and-shadows/chapter-16-accurate-atmospheric-scattering
+# Clustered rendering
+https://github.com/Angelo1211/HybridRenderingEngine/blob/master/assets/shaders/ComputeShaders/clusterShader.comp
+http://www.aortiz.me/2018/12/21/CG.html
+# Music
+https://supercollider.github.io/
+https://ardour.org/
+https://sonic-pi.net/
+https://www.youtube.com/watch?v=1jaHem4eae4
+https://www.youtube.com/watch?v=FVhAneOg0sc
+https://github.com/phil-opp/rust-bit-field
