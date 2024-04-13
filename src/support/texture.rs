@@ -311,10 +311,8 @@ impl Texture {
             (std::mem::size_of::<u8>() as u32 * image_width * image_height * 4) as vk::DeviceSize;
         let image_data = match &image_object {
             DynamicImage::ImageLuma8(_) |
-            DynamicImage::ImageBgr8(_) |
             DynamicImage::ImageRgb8(_) |
             DynamicImage::ImageLumaA8(_) |
-            DynamicImage::ImageBgra8(_) |
             DynamicImage::ImageRgba8(_) => image_object.to_rgba8().into_raw(),
             _ => panic!("Unsupported image type (probably 16 bits per channel)"),
         };
